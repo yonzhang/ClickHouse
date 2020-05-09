@@ -14,9 +14,6 @@
 #include <ext/range.h>
 
 #include "formatString.h"
-#include <common/logger_useful.h>
-#include <DataTypes/DataTypeDate.h>
-#include <DataTypes/DataTypesNumber.h>
 
 
 namespace DB
@@ -29,62 +26,6 @@ namespace ErrorCodes
 }
 
 using namespace GatherUtils;
-
-
-class NuColumnarConsistentHash : public IFunction
-{
-public:
-    static constexpr auto name = "NuColumnarConsistentHash";
-
-    static FunctionPtr create(const Context &)
-    {
-        return std::make_shared<NuColumnarConsistentHash>();
-    }
-
-    String getName() const override { return name; }
-
-    bool isVariadic() const override { return true; }
-
-    size_t getNumberOfArguments() const override { return 0; }
-
-    bool isInjective(const Block &) const override { return false; }
-
-    bool useDefaultImplementationForConstants() const override { return true; }
-
-    DataTypePtr getReturnTypeImpl(const DataTypes & ) const override 
-    {
-        return std::make_shared<DataTypeNumber<UInt32>>();
-    }
-
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result, size_t ) override
-    {
-
-        Logger * log = &Logger::get("NuColumnarConsistentHash");
-
-        const IColumn * c0 = block.getByPosition(arguments[0]).column.get(); // date type
-        LOG_DEBUG(log, "c0 name: " + c0->getName());
-        const IDataType * type0 = block.getByPosition(arguments[0]).type.get();
-        WhichDataType which(type0);
-        // assert type for argument 0 is Date
-        if (!which.isDate()){
-            LOG_WARNING(log, "c0 type is not Date " );
-             throw Exception("argument 0 is not Date type", ErrorCodes::ILLEGAL_COLUMN);
-        }
-        LOG_DEBUG(log, "c0 type is Date " );
-        const auto * eventts = checkAndGetColumn<DataTypeDate::ColumnType>(c0); 
-        LOG_DEBUG(log, "eventts: " << eventts->getElement(0));
-
-        const IColumn * c1 = block.getByPosition(arguments[1]).column.get(); // seller id
-        LOG_DEBUG(log, "c1 name: " + c1->getName());
-        
-        const ColumnInt64 * sellerId = checkAndGetColumn<ColumnInt64>(c1); 
-        LOG_DEBUG(log, "sellerId: " << sellerId->getElement(0));
-        auto c_res = ColumnUInt32::create();
-        auto & data = c_res->getData();
-        data.push_back(0); // return shard 0, always
-        block.getByPosition(result).column = std::move(c_res);
-    }
-};
 
 template <typename Name, bool is_injective>
 class ConcatImpl : public IFunction
@@ -287,7 +228,6 @@ void registerFunctionsConcat(FunctionFactory & factory)
 {
     factory.registerFunction<ConcatOverloadResolver>(FunctionFactory::CaseInsensitive);
     factory.registerFunction<FunctionConcatAssumeInjective>();
-    factory.registerFunction<NuColumnarConsistentHash>();
 }
 
 }
