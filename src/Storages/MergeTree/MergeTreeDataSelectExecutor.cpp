@@ -142,6 +142,49 @@ static RelativeSize convertAbsoluteSampleSizeToRelative(const ASTPtr & node, siz
     return std::min(RelativeSize(1), RelativeSize(absolute_sample_size) / RelativeSize(approx_total_rows));
 }
 
+std::string MergeTreeDataSelectExecutor::getRequiredPartitionVersionIfExists(const SelectQueryInfo & query_info) const{
+    ASTPtr ast = query_info.query;
+    // assert the root ast is ASTSelectQuery
+    ASTSelectQuery* select = dynamic_cast<ASTSelectQuery*>(ast.get());
+    if(!select){
+        LOG_DEBUG(log, "Skipping partition version check for non-select query");
+        return "";
+    }
+    ASTPtr with_clause = select->with();
+    ASTExpressionList* with_expression = dynamic_cast<ASTExpressionList*>(with_clause.get());
+    if(!with_expression){
+        LOG_DEBUG(log, "Skipping partition version check without with_clause");
+        return "";
+    }
+
+    ASTLiteral* ast_literal = dynamic_cast<ASTLiteral*>(with_expression->children[0].get());
+    if(!ast_literal){
+        LOG_DEBUG(log, "Skipping partition version check for with_clause without ASTLiteral");
+        return "";
+    }
+    if(ast_literal->unique_column_name != "_shard_map_version"){
+        LOG_DEBUG(log, "Skipping partition version check as _shard_map_version is not found");
+        return "";
+    }
+    Field& f = ast_literal->value;
+    DB::Field::Types::Which type = f.getType();
+    if(type != DB::Field::Types::Which::String){
+        LOG_DEBUG(log, "Skipping partition version check as version value is not string type");
+        return "";
+    }
+
+    std::string ver = f.get<std::string>();
+    return ver;
+}
+
+std::unordered_map<std::string, std::set<std::string>> MergeTreeDataSelectExecutor::getPartitionVerMap() const{
+    return {
+        {"20200508-1", {"1"}},
+        {"20200509-2", {"1", "2"}},
+        {"20200511-6", {"2"}}
+    };
+}
+
 
 Pipes MergeTreeDataSelectExecutor::read(
     const Names & column_names_to_return,
@@ -257,6 +300,10 @@ Pipes MergeTreeDataSelectExecutor::readFromParts(
         }
     }
 
+    // check version match for this part
+    std::string requiredPartitionVer = getRequiredPartitionVersionIfExists(query_info);
+    std::unordered_map<std::string, std::set<std::string>> map = getPartitionVerMap();
+    LOG_DEBUG(log, "Required partiton version: " << requiredPartitionVer);// << ", partitionVerMap: " << map);                
     /// Select the parts in which there can be data that satisfy `minmax_idx_condition` and that match the condition on `_part`,
     ///  as well as `max_block_number_to_read`.
     {
@@ -281,6 +328,19 @@ Pipes MergeTreeDataSelectExecutor::readFromParts(
                 if (blocks_iterator == max_block_numbers_to_read->end() || part->info.max_block > blocks_iterator->second)
                     continue;
             }
+
+            if(!requiredPartitionVer.empty()){
+                std::string partitionId = part->info.partition_id;
+                LOG_DEBUG(log, "Examining part: " << part->name << " of partition : " << partitionId);
+                auto foundPartition = map.find(partitionId);
+                if(foundPartition != map.end()){
+                    std::set<std::string> setOfVers = foundPartition->second;
+                    if(!setOfVers.contains(requiredPartitionVer)){
+                        LOG_DEBUG(log, "Skipping part: " << part->name << " of partition : " << partitionId);
+                        continue;
+                    }
+                }
+            } 
 
             parts.push_back(part);
         }

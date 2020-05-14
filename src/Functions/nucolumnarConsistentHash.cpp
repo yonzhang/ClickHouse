@@ -72,13 +72,15 @@ public:
     {
         const IDataType * type0 = block.getByPosition(arguments[0]).type.get();
         WhichDataType which(type0);
+        LOG_DEBUG(log, "column 0" << ": type=" << getTypeName(which.idx));
+        
         // assert type for argument 0 is Date
-        if (!which.isDate()){
-            LOG_WARNING(log, "NuColumnarConsistentHash function's first argument must be Date type");
-            throw Exception("NuColumnarConsistentHash function's first argument is not Date type", ErrorCodes::ILLEGAL_COLUMN);
+        if (!which.isUInt32()){ // first argument must be UInt32 type
+            LOG_WARNING(log, "NuColumnarConsistentHash function's first argument must be UInt32");
+            throw Exception("NuColumnarConsistentHash function's first argument is not UInt32", ErrorCodes::ILLEGAL_COLUMN);
         }
         const IColumn * c0 = block.getByPosition(arguments[0]).column.get(); // Date type column
-        const auto * fdate = checkAndGetColumn<DataTypeDate::ColumnType>(c0); 
+        const auto * fdate = checkAndGetColumn<ColumnUInt32>(c0); 
         LOG_DEBUG(log, "column 0" << ": name=" << c0->getName() << ", type=Date" << ", value=" << fdate->getElement(0));
 
         UInt32 shard = lookupShard(fdate->getElement(0), block, arguments);
@@ -99,25 +101,25 @@ private:
         LOG_WARNING(log, "max: " << max << ", middle: " << middle);
         return 
         {
-            {18390,    // daysSinceEpoch, 2020-05-08
+            {20200508,    // daysSinceEpoch, 2020-05-08
                {
                    {middle, 0},  // shard 0 for hash value less than 0 and middle
                    {max, 1}      // shard 1 for hash value between middle+1 and max
                }
             },
-            {18391,    // daysSinceEpoch, , 2020-05-09
+            {20200509,    // daysSinceEpoch, , 2020-05-09
                {
                    {middle, 0}, // shard 0 for hash value less than 0 and middle
                    {max, 1}     // shard 1 for hash value between middle+1 and max
                }
             },
-            {18392,    // daysSinceEpoch, , 2020-05-10
+            {20200510,    // daysSinceEpoch, , 2020-05-10
                {
                    {middle, 0}, // shard 0 for hash value less than 0 and middle
                    {max, 1}     // shard 1 for hash value between middle+1 and max
                }
             },
-            {18393,    // daysSinceEpoch, , 2020-05-11
+            {20200511,    // daysSinceEpoch, , 2020-05-11
                {
                    {middle, 0}, // shard 0 for hash value less than 0 and middle
                    {max, 1}     // shard 1 for hash value between middle+1 and max

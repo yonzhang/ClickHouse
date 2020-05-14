@@ -102,6 +102,18 @@ private:
         MergeTreeData::DataPartPtr part,
         const MarkRanges & ranges,
         const Settings & settings) const;
+
+    /**
+     * get shardmapping version from with clause, normally it is like this
+     *  with '125' _shard_map_version
+     * where 125 is the version which query uses
+     **/
+    std::string getRequiredPartitionVersionIfExists(const SelectQueryInfo & query_info) const;
+
+    /**
+     * static metadata information: partition to vers map
+     **/ 
+    std::unordered_map<std::string, std::set<std::string>> getPartitionVerMap() const;
 };
 
 }
