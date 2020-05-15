@@ -21,6 +21,7 @@
 
 #include <Interpreters/ExternalDictionariesLoader.h>
 #include <Dictionaries/ComplexKeyHashedDictionary.h>
+#include <Common/Macros.h>
 
 
 /// Allow to use __uint128_t as a template parameter for boost::rational.
@@ -181,14 +182,13 @@ std::string MergeTreeDataSelectExecutor::getRequiredPartitionVersionIfExists(con
     return ver;
 }
 
-std::unordered_map<std::string, std::set<std::string>> MergeTreeDataSelectExecutor::getPartitionVerMap() const{
-    return {
+
+/**
+ *   Example dictionary file
         {"20200508-1", {"1"}},
         {"20200509-2", {"1", "2"}},
         {"20200511-6", {"2"}}
-    };
-}
-
+ **/ 
 std::set<std::string> MergeTreeDataSelectExecutor::getPartitionVerMap(const Context & context, const std::string& partition_id) const{
     const ExternalDictionariesLoader & dictionaries_loader = context.getExternalDictionariesLoader();
     auto partition_ver_dict = dictionaries_loader.getDictionary("default.partition_ver_dict");
@@ -335,10 +335,19 @@ Pipes MergeTreeDataSelectExecutor::readFromParts(
         }
     }
 
+    // check current shard id from Macros
+    auto macros = context.getMacros();
+    Macros::MacroMap mm = macros->getMacroMap();
+    auto foundShard = mm.find("shard");
+    if(foundShard != mm.end()){
+        LOG_DEBUG(log, "shard id: " << foundShard->second);    
+    }else{
+        LOG_DEBUG(log, "shard id not found in Macros");    
+    }
+    
     // check version match for this part
     std::string requiredPartitionVer = getRequiredPartitionVersionIfExists(query_info);
-    // std::unordered_map<std::string, std::set<std::string>> map = getPartitionVerMap();
-    LOG_DEBUG(log, "Required partiton version: " << requiredPartitionVer);// << ", partitionVerMap: " << map);                
+    LOG_DEBUG(log, "Required partiton version: " << requiredPartitionVer);          
     /// Select the parts in which there can be data that satisfy `minmax_idx_condition` and that match the condition on `_part`,
     ///  as well as `max_block_number_to_read`.
     {
@@ -367,15 +376,6 @@ Pipes MergeTreeDataSelectExecutor::readFromParts(
             if(!requiredPartitionVer.empty()){
                 std::string partitionId = part->info.partition_id;
                 LOG_DEBUG(log, "Examining part: " << part->name << " of partition : " << partitionId);
-                // auto foundPartition = map.find(partitionId);
-                // if(foundPartition != map.end()){
-                //     std::set<std::string> setOfVers = foundPartition->second;
-                //     if(!setOfVers.contains(requiredPartitionVer)){
-                //         LOG_DEBUG(log, "Skipping part: " << part->name << " of partition : " << partitionId);
-                //         continue;
-                //     }
-                // }
-
                 std::set<std::string> setOfVersions = getPartitionVerMap(context, partitionId);
                 if(!setOfVersions.contains(requiredPartitionVer)){
                     LOG_DEBUG(log, "Skipping part: " << part->name << " of partition : " << partitionId);
