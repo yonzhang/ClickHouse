@@ -114,6 +114,8 @@ private:
      * static metadata information: partition to vers map
      **/ 
     std::unordered_map<std::string, std::set<std::string>> getPartitionVerMap() const;
+
+    std::set<std::string> getPartitionVerMap(const Context & context, const std::string& partition_id) const;
 };
 
 }

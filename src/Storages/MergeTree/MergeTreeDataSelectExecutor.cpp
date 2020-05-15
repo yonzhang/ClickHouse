@@ -19,6 +19,10 @@
 #include <Parsers/ASTSampleRatio.h>
 #include <Interpreters/ExpressionAnalyzer.h>
 
+#include <Interpreters/ExternalDictionariesLoader.h>
+#include <Dictionaries/ComplexKeyHashedDictionary.h>
+
+
 /// Allow to use __uint128_t as a template parameter for boost::rational.
 // https://stackoverflow.com/questions/41198673/uint128-t-not-working-with-clang-and-libstdc
 #if !defined(__GLIBCXX_BITSIZE_INT_N_0) && defined(__SIZEOF_INT128__)
@@ -185,6 +189,37 @@ std::unordered_map<std::string, std::set<std::string>> MergeTreeDataSelectExecut
     };
 }
 
+std::set<std::string> MergeTreeDataSelectExecutor::getPartitionVerMap(const Context & context, const std::string& partition_id) const{
+    const ExternalDictionariesLoader & dictionaries_loader = context.getExternalDictionariesLoader();
+    auto partition_ver_dict = dictionaries_loader.getDictionary("default.partition_ver_dict");
+    const IDictionaryBase * dict_ptr = partition_ver_dict.get();
+    const auto dict = typeid_cast<const ComplexKeyHashedDictionary *>(dict_ptr);
+    if (!dict)
+        return std::set<std::string>(); // empty set
+    auto partition_id_col = ColumnString::create();
+    partition_id_col->insert(partition_id);
+    ColumnString::Ptr immutable_ptr = std::move(partition_id_col);
+    Columns key_columns;
+    key_columns.push_back(immutable_ptr);
+    DataTypes key_types;
+    key_types.push_back(std::make_shared<DataTypeString>());
+    auto out = ColumnString::create();
+    String attr_name = "versions";    
+    dict->getString(attr_name, key_columns, key_types, out.get());
+    std::string supportedVersions = out->getDataAt(0).toString();
+
+    std::size_t pos = 0;
+    std::size_t separator_pos = supportedVersions.find_first_of('|');
+    std::set<std::string> set;
+    while(separator_pos != std::string::npos){
+        set.insert(supportedVersions.substr(pos, separator_pos-pos));
+        pos = separator_pos+1;
+        separator_pos = supportedVersions.find_first_of('|', pos);
+    }
+    set.insert(supportedVersions.substr(pos));
+    return set;
+}
+
 
 Pipes MergeTreeDataSelectExecutor::read(
     const Names & column_names_to_return,
@@ -302,7 +337,7 @@ Pipes MergeTreeDataSelectExecutor::readFromParts(
 
     // check version match for this part
     std::string requiredPartitionVer = getRequiredPartitionVersionIfExists(query_info);
-    std::unordered_map<std::string, std::set<std::string>> map = getPartitionVerMap();
+    // std::unordered_map<std::string, std::set<std::string>> map = getPartitionVerMap();
     LOG_DEBUG(log, "Required partiton version: " << requiredPartitionVer);// << ", partitionVerMap: " << map);                
     /// Select the parts in which there can be data that satisfy `minmax_idx_condition` and that match the condition on `_part`,
     ///  as well as `max_block_number_to_read`.
@@ -332,13 +367,19 @@ Pipes MergeTreeDataSelectExecutor::readFromParts(
             if(!requiredPartitionVer.empty()){
                 std::string partitionId = part->info.partition_id;
                 LOG_DEBUG(log, "Examining part: " << part->name << " of partition : " << partitionId);
-                auto foundPartition = map.find(partitionId);
-                if(foundPartition != map.end()){
-                    std::set<std::string> setOfVers = foundPartition->second;
-                    if(!setOfVers.contains(requiredPartitionVer)){
-                        LOG_DEBUG(log, "Skipping part: " << part->name << " of partition : " << partitionId);
-                        continue;
-                    }
+                // auto foundPartition = map.find(partitionId);
+                // if(foundPartition != map.end()){
+                //     std::set<std::string> setOfVers = foundPartition->second;
+                //     if(!setOfVers.contains(requiredPartitionVer)){
+                //         LOG_DEBUG(log, "Skipping part: " << part->name << " of partition : " << partitionId);
+                //         continue;
+                //     }
+                // }
+
+                std::set<std::string> setOfVersions = getPartitionVerMap(context, partitionId);
+                if(!setOfVersions.contains(requiredPartitionVer)){
+                    LOG_DEBUG(log, "Skipping part: " << part->name << " of partition : " << partitionId);
+                    continue;
                 }
             } 
 
