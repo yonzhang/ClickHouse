@@ -208,16 +208,21 @@ std::set<std::string> MergeTreeDataSelectExecutor::getPartitionVerMap(const Cont
     dict->getString(attr_name, key_columns, key_types, out.get());
     std::string supportedVersions = out->getDataAt(0).toString();
 
-    std::size_t pos = 0;
-    std::size_t separator_pos = supportedVersions.find_first_of('|');
-    std::set<std::string> set;
-    while(separator_pos != std::string::npos){
-        set.insert(supportedVersions.substr(pos, separator_pos-pos));
-        pos = separator_pos+1;
-        separator_pos = supportedVersions.find_first_of('|', pos);
+    std::set<std::string> setOfVersions;
+    if(!supportedVersions.empty()){
+        LOG_DEBUG(log, "SupportedVersions: " << supportedVersions << " for partition: " << partition_id);
+        std::size_t pos = 0;
+        std::size_t separator_pos = supportedVersions.find_first_of('|');
+        while(separator_pos != std::string::npos){
+            setOfVersions.insert(supportedVersions.substr(pos, separator_pos-pos));
+            pos = separator_pos+1;
+            separator_pos = supportedVersions.find_first_of('|', pos);
+        }
+        setOfVersions.insert(supportedVersions.substr(pos));
+    }else{
+        LOG_WARNING(log, "SupportedVersions is empty for partition: " << partition_id);
     }
-    set.insert(supportedVersions.substr(pos));
-    return set;
+    return setOfVersions;
 }
 
 
@@ -373,6 +378,7 @@ Pipes MergeTreeDataSelectExecutor::readFromParts(
                     continue;
             }
 
+            // skip partitions which are not required by current global version
             if(!requiredPartitionVer.empty()){
                 std::string partitionId = part->info.partition_id;
                 LOG_DEBUG(log, "Examining part: " << part->name << " of partition : " << partitionId);
