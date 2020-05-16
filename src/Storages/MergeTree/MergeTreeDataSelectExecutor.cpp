@@ -147,6 +147,14 @@ static RelativeSize convertAbsoluteSampleSizeToRelative(const ASTPtr & node, siz
     return std::min(RelativeSize(1), RelativeSize(absolute_sample_size) / RelativeSize(approx_total_rows));
 }
 
+/**
+ * Parse out required version for all partitions involved.
+ * The query in DT side:
+ *   with (select dictGet('default.partition_ver_dict', 'versions', tuple('0'))) as _shard_map_version select * from t1
+ * The rewritten query received in data node side:
+ *   WITH CAST(‘1’, ‘String’) AS _shard_map_version SELECT t1.id, t1.name FROM default.t1
+ * 
+ **/
 std::string MergeTreeDataSelectExecutor::getRequiredPartitionVersionIfExists(const SelectQueryInfo & query_info) const{
     ASTPtr ast = query_info.query;
     // assert the root ast is ASTSelectQuery
@@ -162,24 +170,32 @@ std::string MergeTreeDataSelectExecutor::getRequiredPartitionVersionIfExists(con
         return "";
     }
 
-    ASTLiteral* ast_literal = dynamic_cast<ASTLiteral*>(with_expression->children[0].get());
-    if(!ast_literal){
-        LOG_DEBUG(log, "Skipping partition version check for with_clause without ASTLiteral");
-        return "";
-    }
-    if(ast_literal->unique_column_name != "_shard_map_version"){
-        LOG_DEBUG(log, "Skipping partition version check as _shard_map_version is not found");
-        return "";
-    }
-    Field& f = ast_literal->value;
-    DB::Field::Types::Which type = f.getType();
-    if(type != DB::Field::Types::Which::String){
-        LOG_DEBUG(log, "Skipping partition version check as version value is not string type");
+    ASTFunction* cast_function = dynamic_cast<ASTFunction*>(with_expression->children[0].get());
+    if(!cast_function || cast_function->name != "CAST"){
+        LOG_DEBUG(log, "Skipping partition version check as cast function is not present");
         return "";
     }
 
-    std::string ver = f.get<std::string>();
-    return ver;
+    if(cast_function->alias != "_shard_map_version"){
+        LOG_DEBUG(log, "Skipping partition version check as alias _shard_map_version is not found");
+        return "";
+    }
+
+    ASTLiteral* ast_literal = dynamic_cast<ASTLiteral*>(cast_function->arguments->children[0].get());
+    if(!ast_literal){
+        LOG_DEBUG(log, "Skipping partition version check as CAST first argument is not ASTLiteral");
+        return "";
+    }
+
+    // std::string requiredVer = ast_literal->unique_column_name;
+    Field& f = ast_literal->value;
+    DB::Field::Types::Which type = f.getType();
+    if(type != DB::Field::Types::Which::String){
+         LOG_DEBUG(log, "Skipping partition version check as version value is not string type");
+         return "";
+    }
+    std::string requiredVer = f.get<std::string>();
+    return requiredVer;
 }
 
 
