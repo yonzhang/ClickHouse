@@ -262,6 +262,10 @@ list (APPEND dbms_headers TableFunctions/ITableFunction.h   TableFunctions/Table
 list (APPEND dbms_sources Dictionaries/DictionaryFactory.cpp Dictionaries/DictionarySourceFactory.cpp Dictionaries/DictionaryStructure.cpp  Dictionaries/getDictionaryConfigurationFromAST.cpp)
 list (APPEND dbms_headers Dictionaries/DictionaryFactory.h   Dictionaries/DictionarySourceFactory.h   Dictionaries/DictionaryStructure.h Dictionaries/getDictionaryConfigurationFromAST.h)
 
+### add ComplexKeyHashedDictionary dependency
+list (APPEND dbms_sources Dictionaries/ComplexKeyHashedDictionary.cpp Dictionaries/DictionaryBlockInputStreamBase.cpp)
+list (APPEND dbms_headers Dictionaries/ComplexKeyHashedDictionary.h Dictionaries/DictionaryBlockInputStreamBase.h)
+
 if (NOT ENABLE_SSL)
     list (REMOVE_ITEM clickhouse_common_io_sources Common/OpenSSLHelpers.cpp)
     list (REMOVE_ITEM clickhouse_common_io_headers Common/OpenSSLHelpers.h)

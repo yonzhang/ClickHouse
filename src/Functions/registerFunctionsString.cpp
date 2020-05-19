@@ -27,6 +27,8 @@ void registerFunctionStartsWith(FunctionFactory &);
 void registerFunctionEndsWith(FunctionFactory &);
 void registerFunctionTrim(FunctionFactory &);
 void registerFunctionRegexpQuoteMeta(FunctionFactory &);
+// support custom consistent hash
+void registerFunctionNuColumnarConsistentHash(FunctionFactory &);
 
 #if USE_BASE64
 void registerFunctionBase64Encode(FunctionFactory &);
@@ -58,6 +60,7 @@ void registerFunctionsString(FunctionFactory & factory)
     registerFunctionEndsWith(factory);
     registerFunctionTrim(factory);
     registerFunctionRegexpQuoteMeta(factory);
+    registerFunctionNuColumnarConsistentHash(factory);
 #if USE_BASE64
     registerFunctionBase64Encode(factory);
     registerFunctionBase64Decode(factory);
