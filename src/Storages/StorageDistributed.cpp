@@ -613,7 +613,7 @@ namespace
         {"_partition_id", "String"},
         {"_sample_factor", "Float64"},
         {"_shard_num", "UInt32"},
-        {"_sharding_ver", "String"}
+        {"_sharding_ver", "UInt32"}
     };
 }
 

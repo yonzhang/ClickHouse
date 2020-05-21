@@ -148,7 +148,7 @@ private:
         };
     }
 
-    UInt32 lookupShard(std::string table, UInt32 date, UInt32 rangeId, std::string activeVersion){
+    UInt32 lookupShard(std::string table, UInt32 date, UInt32 rangeId, const std::string& activeVersion){
         std::ostringstream oss;
         oss << table << '_' << date << '_' << rangeId << '_' << activeVersion;
         std::string key = oss.str();
@@ -159,6 +159,53 @@ private:
             throw Exception("NuColumnarConsistentHash shard not found in map: " + oss.str(), ErrorCodes::ILLEGAL_COLUMN);
         }
         return foundShard->second;
+
+
+    //     std::shared_ptr<const IDictionaryBase> partition_ver_dict;
+    //     try{
+    //         const ExternalDictionariesLoader & dictionaries_loader = context.getExternalDictionariesLoader();
+    //         partition_ver_dict = dictionaries_loader.getDictionary("default.partition_map_dict");
+    //     }catch(const DB::Exception& ex){
+    //         LOG_DEBUG(log, ex.what());
+    //         return std::nullopt;
+    //     }
+
+    // const IDictionaryBase * dict_ptr = partition_ver_dict.get();
+    // const auto dict = typeid_cast<const ComplexKeyHashedDictionary *>(dict_ptr);
+    // if (!dict)
+    //     return std::nullopt;
+
+    // Columns key_columns;
+    // DataTypes key_types;
+
+    // // column 'table'
+    // auto key_tablename = ColumnString::create();
+    // key_tablename->insert(db_table_name);
+    // ColumnString::Ptr immutable_ptr_key_tablename = std::move(key_tablename);
+    // key_columns.push_back(immutable_ptr_key_tablename);
+    // key_types.push_back(std::make_shared<DataTypeString>());
+
+    // // column 'date'
+    // auto key_date = ColumnString::create();
+    // key_date->insert("00000000");
+    // ColumnString::Ptr immutable_ptr_key_date = std::move(key_date);
+    // key_columns.push_back(immutable_ptr_key_date);
+    // key_types.push_back(std::make_shared<DataTypeString>());
+
+    // // column 'range_id'
+    // auto key_rangeid = ColumnUInt32::create();
+    // key_rangeid->insert(0);
+    // ColumnUInt32::Ptr immutable_ptr_key_rangeid = std::move(key_rangeid);
+    // key_columns.push_back(immutable_ptr_key_rangeid);
+    // key_types.push_back(std::make_shared<DataTypeUInt32>());
+
+    // // column 'active_ver'
+    // auto out = ColumnString::create();
+    // String attr_name = "active_ver";    
+    // dict->getString(attr_name, key_columns, key_types, out.get());
+    // std::string active_ver = out->getDataAt(0).toString();
+
+    // return std::optional<std::string>(active_ver);
     }
 
 private:
