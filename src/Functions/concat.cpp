@@ -15,6 +15,7 @@
 
 #include "formatString.h"
 
+
 namespace DB
 {
 namespace ErrorCodes
@@ -25,7 +26,6 @@ namespace ErrorCodes
 }
 
 using namespace GatherUtils;
-
 
 template <typename Name, bool is_injective>
 class ConcatImpl : public IFunction

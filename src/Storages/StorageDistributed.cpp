@@ -286,6 +286,7 @@ StorageDistributed::StorageDistributed(
                ColumnsDescription(
                    {
                        {"_shard_num", std::make_shared<DataTypeUInt32>()},
+                       {"_sharding_ver", std::make_shared<DataTypeUInt32>()},
                    },
                true))
     , remote_database(remote_database_)
@@ -301,7 +302,7 @@ StorageDistributed::StorageDistributed(
 
     if (sharding_key_)
     {
-        sharding_key_expr = buildShardingKeyExpression(sharding_key_, global_context, getColumns().getAllPhysical(), false);
+        sharding_key_expr = buildShardingKeyExpression(sharding_key_, global_context, getColumns().getAll/*.getAllPhysical*/(), false);
         sharding_key_column_name = sharding_key_->getColumnName();
     }
 
@@ -611,6 +612,8 @@ namespace
         {"_part_index", "UInt64"},
         {"_partition_id", "String"},
         {"_sample_factor", "Float64"},
+        {"_shard_num", "UInt32"},
+        {"_sharding_ver", "String"}
     };
 }
 
@@ -701,7 +704,7 @@ ClusterPtr StorageDistributed::getOptimizedCluster(const Context & context, cons
         {
             LOG_DEBUG(log, "Reading from " << table_id.getNameForLogs() << ": "
                            "Skipping irrelevant shards - the query will be sent to the following shards of the cluster (shard numbers): "
-                           " " << makeFormattedListOfShards(cluster));
+                           " " << makeFormattedListOfShards(optimized));
             return optimized;
         }
     }
@@ -869,7 +872,7 @@ void registerStorageDistributed(StorageFactory & factory)
         /// Check that sharding_key exists in the table and has numeric type.
         if (sharding_key)
         {
-            auto sharding_expr = buildShardingKeyExpression(sharding_key, args.context, args.columns.getAllPhysical(), true);
+            auto sharding_expr = buildShardingKeyExpression(sharding_key, args.context, args.columns.getAll()/*.getAllPhysical()*/, true);
             const Block & block = sharding_expr->getSampleBlock();
 
             if (block.columns() != 1)
