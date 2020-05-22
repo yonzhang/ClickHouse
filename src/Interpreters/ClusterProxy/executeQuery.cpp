@@ -116,9 +116,6 @@ Pipes executeQuery(
     const ASTPtr & query_ast, const Context & context, const Settings & settings, const SelectQueryInfo & query_info)
 {
     Pipes res;
-
-    const std::string query = queryToString(query_ast);
-
     Context new_context = removeUserRestrictionsFromSettings(context, settings);
 
     ThrottlerPtr user_level_throttler;
@@ -139,19 +136,19 @@ Pipes executeQuery(
         throttler = user_level_throttler;
 
     //@resharding-support: rewrite query with active version for snapshot query if needed
-    {
-        auto foundVer = findActiveShardingMapVersionIfExists(context, query_ast);
-        if(foundVer){
-            LOG_DEBUG(&Logger::get("ClusterProxy::executeQuery"), "found active sharding map version: " << *foundVer);
-            auto modified_query_ast = query_ast->clone();
-            VirtualColumnUtils::rewriteEntityInAst(modified_query_ast, "_sharding_ver", *foundVer);
-        }else{
-            LOG_DEBUG(&Logger::get("ClusterProxy::SelectStreamFactory"), "No active version found");
-        }
+    auto modified_query_ast = query_ast->clone();
+    auto foundVer = findActiveShardingMapVersionIfExists(context, query_ast);
+    if(foundVer){
+        LOG_DEBUG(&Logger::get("ClusterProxy::executeQuery"), "found active sharding map version: " << *foundVer);
+        VirtualColumnUtils::rewriteEntityInAst(modified_query_ast, "_sharding_ver", *foundVer);
+    }else{
+        LOG_DEBUG(&Logger::get("ClusterProxy::SelectStreamFactory"), "No active version found");
     }
 
+    const std::string query = queryToString(modified_query_ast);
+
     for (const auto & shard_info : cluster->getShardsInfo())
-        stream_factory.createForShard(shard_info, query, query_ast, new_context, throttler, query_info, res);
+        stream_factory.createForShard(shard_info, query, modified_query_ast, new_context, throttler, query_info, res);
 
     return res;
 }
