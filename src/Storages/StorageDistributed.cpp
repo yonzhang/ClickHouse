@@ -286,7 +286,7 @@ StorageDistributed::StorageDistributed(
                ColumnsDescription(
                    {
                        {"_shard_num", std::make_shared<DataTypeUInt32>()},
-                       {"_sharding_ver", std::make_shared<DataTypeUInt32>()},
+                       {"_sharding_ver", std::make_shared<DataTypeString>()},
                    },
                true))
     , remote_database(remote_database_)
