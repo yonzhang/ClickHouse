@@ -38,8 +38,6 @@ public:
         const SelectQueryInfo & query_info,
         Pipes & res) override;
 
-    static std::optional<std::string> findSnapshotQueryActiveVersionIfExists(const Context & context, const ASTPtr & query_ast);
-
 private:
     const Block header;
     QueryProcessingStage::Enum processed_stage;

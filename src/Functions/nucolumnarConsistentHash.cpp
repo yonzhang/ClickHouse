@@ -29,6 +29,9 @@ namespace ErrorCodes
 }    
 
 /**
+ * @resharding-support
+ * 
+ *
  * This consistent hashing algorithm has 2 benefits in case of resharding
  *  - moving less keys
  *  - copy Clickhouse partition without affecting live traffic
@@ -72,7 +75,7 @@ public:
 
     
     /**
-     * The expected arguments must be (table_name, f_date, hash_range_id, active_version)
+     * The expected arguments must be (table_name, f_date, hash_range_id)
      * hash_range_id is from 1 to 16
      **/
     void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result, size_t ) override

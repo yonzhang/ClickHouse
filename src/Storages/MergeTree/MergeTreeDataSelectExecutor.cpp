@@ -148,6 +148,7 @@ static RelativeSize convertAbsoluteSampleSizeToRelative(const ASTPtr & node, siz
 }
 
 /**
+ * @resharding-support
  * Parse out required version for all partitions involved.
  * The query in DT side:
  *   with (select dictGet('default.partition_ver_dict', 'versions', tuple('0'))) as _shard_map_version select * from t1
@@ -200,6 +201,8 @@ std::string MergeTreeDataSelectExecutor::getRequiredPartitionVersionIfExists(con
 
 
 /**
+ * @resharding-support
+ * TODO: change return value type
  *   Example dictionary file
         {"20200508-1", {"1"}},
         {"20200509-2", {"1", "2"}},
