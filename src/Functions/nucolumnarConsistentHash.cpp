@@ -17,7 +17,9 @@
 #include <Core/Types.h>
 #include <common/types.h>
 #include <Columns/ColumnConst.h>
-
+#include <Interpreters/ExternalDictionariesLoader.h>
+#include <Dictionaries/ComplexKeyHashedDictionary.h>
+#include <Interpreters/Context.h>
 
 namespace DB
 {
@@ -48,10 +50,12 @@ class NuColumnarConsistentHash : public IFunction
 public:
     static constexpr auto name = "NuColumnarConsistentHash";
 
-    static FunctionPtr create(const Context &)
+    static FunctionPtr create(const Context & context)
     {
-        return std::make_shared<NuColumnarConsistentHash>();
+        return std::make_shared<NuColumnarConsistentHash>(context.getExternalDictionariesLoader());
     }
+
+    NuColumnarConsistentHash(const ExternalDictionariesLoader & dictionaries_loader_) : dictionaries_loader(dictionaries_loader_) {}
 
     String getName() const override { return name; }
 
@@ -63,13 +67,13 @@ public:
 
     bool useDefaultImplementationForConstants() const override { return true; }
 
-    DataTypePtr getReturnTypeImpl(const DataTypes & ) const override 
+    DataTypePtr getReturnTypeImpl(const DataTypes & arguments) const override 
     {
-        // if (arguments.size() != 4)
-        //     throw Exception(
-        //         "Number of arguments for function " + getName() + " doesn't match: passed " + toString(arguments.size())
-        //             + ", should be 4.",
-        //         ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
+        if (arguments.size() != 3)
+            throw Exception(
+                "Number of arguments for function " + getName() + " doesn't match: passed " + toString(arguments.size())
+                    + ", should be 3.",
+                ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
         return std::make_shared<DataTypeNumber<UInt32>>();
     }
 
@@ -120,22 +124,7 @@ public:
         const auto * rangeid_col_val = checkAndGetColumn<ColumnUInt32>(rangeid_col); 
         LOG_DEBUG(log, "column 2" << ": name=" << rangeid_col->getName() << ", type=UInt32" << ", value=" << rangeid_col_val->getElement(0));
 
-        // // argument "active_version"
-        // auto& activever_arg = arguments[3];
-        // const IDataType * activever_arg_type = block.getByPosition(activever_arg).type.get();        
-        // // assert type for argument 'active_version' is String
-        // if (activever_arg_type->getTypeId() != TypeIndex::String){
-        //     LOG_WARNING(log, "NuColumnarConsistentHash function's fourth argument must be 'active_version' with 'String' type");
-        //     throw Exception("NuColumnarConsistentHash function's fourth argument 'active_version' is not 'String' type", ErrorCodes::ILLEGAL_COLUMN);
-        // }
-        // const IColumn * activever_col = block.getByPosition(activever_arg).column.get();
-        // const auto * activever_col_val = checkAndGetColumn<ColumnString>(rangeid_col); 
-        // std::string activever = activever_col_val->getDataAt(1).toString();
-        // LOG_DEBUG(log, "column 3" << ": name=" << activever_col->getName() << ", type=String" << ", value=" << activever);
-
-        // UInt32 shard = lookupShard(table, date_col_val->getElement(0), rangeid_col_val->getElement(0), activever);
-
-        UInt32 shard = lookupShard(table, date_col_val->getElement(0), rangeid_col_val->getElement(0), "1");
+        UInt32 shard = lookupShard(table, date_col_val->getElement(0), rangeid_col_val->getElement(0), "A");
         
         auto c_res = ColumnUInt32::create();
         auto & data = c_res->getData();
@@ -143,75 +132,65 @@ public:
         block.getByPosition(result).column = std::move(c_res);
     }
 private:
-    std::unordered_map<std::string, UInt32> getShardingMap(){
-        return 
-        {
-            {"ads_20200508_0_1", 0},
-            {"ads_20200509_8_1", 1}
-        };
-    }
-
-    UInt32 lookupShard(std::string table, UInt32 date, UInt32 rangeId, const std::string& activeVersion){
-        std::ostringstream oss;
-        oss << table << '_' << date << '_' << rangeId << '_' << activeVersion;
-        std::string key = oss.str();
-        auto map = getShardingMap();
-        auto foundShard = map.find(key);
-        if(foundShard == map.end()){
-            LOG_WARNING(log, "Shard not found: " << oss.str());
-            throw Exception("NuColumnarConsistentHash shard not found in map: " + oss.str(), ErrorCodes::ILLEGAL_COLUMN);
+    UInt32 lookupShard(const std::string& table, UInt32 date, UInt32 rangeId, const std::string& activeVersion){
+        std::shared_ptr<const IDictionaryBase> partition_ver_dict;
+        try{
+            partition_ver_dict = dictionaries_loader.getDictionary("default.partition_map_dict");
+        }catch(const DB::Exception& ex){
+            LOG_DEBUG(log, ex.what());
+            throw Exception{"Shard not found as dictionary partition_map_dict can't be loaded", ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
         }
-        return foundShard->second;
 
+        const IDictionaryBase * dict_ptr = partition_ver_dict.get();
+        const auto dict = typeid_cast<const ComplexKeyHashedDictionary *>(dict_ptr);
+        if (!dict)
+           throw Exception{"Shard not found as dictionary partition_map_dict is not available", ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
 
-    //     std::shared_ptr<const IDictionaryBase> partition_ver_dict;
-    //     try{
-    //         const ExternalDictionariesLoader & dictionaries_loader = context.getExternalDictionariesLoader();
-    //         partition_ver_dict = dictionaries_loader.getDictionary("default.partition_map_dict");
-    //     }catch(const DB::Exception& ex){
-    //         LOG_DEBUG(log, ex.what());
-    //         return std::nullopt;
-    //     }
+        Columns key_columns;
+        DataTypes key_types;
 
-    // const IDictionaryBase * dict_ptr = partition_ver_dict.get();
-    // const auto dict = typeid_cast<const ComplexKeyHashedDictionary *>(dict_ptr);
-    // if (!dict)
-    //     return std::nullopt;
+        // column 'table'
+        auto key_tablename = ColumnString::create();
+        key_tablename->insert(table);
+        ColumnString::Ptr immutable_ptr_key_tablename = std::move(key_tablename);
+        key_columns.push_back(immutable_ptr_key_tablename);
+        key_types.push_back(std::make_shared<DataTypeString>());
 
-    // Columns key_columns;
-    // DataTypes key_types;
+        // column 'date'
+        auto key_date = ColumnString::create();
+        key_date->insert(std::to_string(date));
+        ColumnString::Ptr immutable_ptr_key_date = std::move(key_date);
+        key_columns.push_back(immutable_ptr_key_date);
+        key_types.push_back(std::make_shared<DataTypeString>());
 
-    // // column 'table'
-    // auto key_tablename = ColumnString::create();
-    // key_tablename->insert(db_table_name);
-    // ColumnString::Ptr immutable_ptr_key_tablename = std::move(key_tablename);
-    // key_columns.push_back(immutable_ptr_key_tablename);
-    // key_types.push_back(std::make_shared<DataTypeString>());
+        // column 'range_id'
+        auto key_rangeid = ColumnUInt32::create();
+        key_rangeid->insert(rangeId);
+        ColumnUInt32::Ptr immutable_ptr_key_rangeid = std::move(key_rangeid);
+        key_columns.push_back(immutable_ptr_key_rangeid);
+        key_types.push_back(std::make_shared<DataTypeUInt32>());
 
-    // // column 'date'
-    // auto key_date = ColumnString::create();
-    // key_date->insert("00000000");
-    // ColumnString::Ptr immutable_ptr_key_date = std::move(key_date);
-    // key_columns.push_back(immutable_ptr_key_date);
-    // key_types.push_back(std::make_shared<DataTypeString>());
+        // TODO we should use shard id as number
+        // column 'A' - 'F' to get shard id
+        // auto out = ColumnUInt32::create();
+        // PaddedPODArray<UInt32> out(1);
+        // String attr_name = activeVersion;    
+        // dict->getUInt32(attr_name, key_columns, key_types, out);
+        // UInt32 shardId = out.front();
 
-    // // column 'range_id'
-    // auto key_rangeid = ColumnUInt32::create();
-    // key_rangeid->insert(0);
-    // ColumnUInt32::Ptr immutable_ptr_key_rangeid = std::move(key_rangeid);
-    // key_columns.push_back(immutable_ptr_key_rangeid);
-    // key_types.push_back(std::make_shared<DataTypeUInt32>());
+        // column 'A' - 'F' to get shard id
+        auto out = ColumnString::create();
+        String attr_name = activeVersion;    
+        dict->getString(attr_name, key_columns, key_types, out.get());
+        std::string shardId = out->getDataAt(0).toString();
+        LOG_DEBUG(log, "Found shard: " << shardId << " for table: " << table << ", date: " << date << ", rangeId: " << rangeId << ", activeVersion: " << activeVersion);
 
-    // // column 'active_ver'
-    // auto out = ColumnString::create();
-    // String attr_name = "active_ver";    
-    // dict->getString(attr_name, key_columns, key_types, out.get());
-    // std::string active_ver = out->getDataAt(0).toString();
-
-    // return std::optional<std::string>(active_ver);
+        return static_cast<UInt32>(std::stoi(shardId));
     }
 
 private:
+    const ExternalDictionariesLoader & dictionaries_loader;
+
     Logger * log = &Logger::get("NuColumnarConsistentHash");
 };
 
@@ -266,7 +245,7 @@ public:
             LOG_DEBUG(log, "hash range: " << *it);
         }
         auto found = std::lower_bound(hash_ranges.begin(), hash_ranges.end(), combinedHash);
-        std::size_t bucketIdx = found-hash_ranges.begin();
+        std::size_t bucketIdx = found-hash_ranges.begin()+1;
         LOG_DEBUG(log, "Combined hash= " << combinedHash  << ", bucket index=" << bucketIdx);
 
         auto c_res = ColumnUInt32::create();

@@ -220,6 +220,7 @@ add_subdirectory (TableFunctions)
 add_subdirectory (Processors)
 add_subdirectory (Formats)
 add_subdirectory (Compression)
+add_subdirectory (Resharding)
 
 
 set(dbms_headers)
