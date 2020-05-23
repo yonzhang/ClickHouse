@@ -207,6 +207,8 @@ private:
     /// Use copy constructor or createGlobal() instead
     Context();
 
+    //@resharding-support
+    std::string sharding_version;
 public:
     /// Create initial Context with ContextShared and etc.
     static Context createGlobal(ContextShared * shared);
@@ -260,6 +262,10 @@ public:
     Strings getCurrentRolesNames() const;
     std::vector<UUID> getEnabledRoles() const;
     Strings getEnabledRolesNames() const;
+
+    //@resharding-support
+    std::string getShardingVer() const;
+    void setShardingVer(const std::string& shardingVer);
 
     /// Checks access rights.
     /// Empty database means the current database.

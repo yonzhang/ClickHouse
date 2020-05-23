@@ -147,101 +147,163 @@ static RelativeSize convertAbsoluteSampleSizeToRelative(const ASTPtr & node, siz
     return std::min(RelativeSize(1), RelativeSize(absolute_sample_size) / RelativeSize(approx_total_rows));
 }
 
+
+static std::optional<std::string> getTopTableNameFromQuery(const SelectQueryInfo & query_info){
+    ASTPtr query_ast = query_info.query;
+    const ASTSelectQuery & select = query_ast->as<ASTSelectQuery &>();
+    if (!select.tables())
+        return std::nullopt;
+
+    const auto & tables_in_select_query = select.tables()->as<ASTTablesInSelectQuery &>();
+    if (tables_in_select_query.children.empty())
+        return std::nullopt;
+
+    const auto & tables_element = tables_in_select_query.children[0]->as<ASTTablesInSelectQueryElement &>();
+    if (!tables_element.table_expression)
+        return std::nullopt;
+
+    const auto& table_expr = tables_element.table_expression->as<ASTTableExpression>();
+    if(!table_expr->database_and_table_name)
+        return std::nullopt;
+
+    const auto& db_table = table_expr->database_and_table_name->as<ASTIdentifier>();
+    return std::optional<std::string> {db_table->name};
+}
+
 /**
  * @resharding-support
- * Parse out required version for all partitions involved.
+ * Parse out required sharding version and table name
  * The query in DT side:
- *   with (select dictGet('default.partition_ver_dict', 'versions', tuple('0'))) as _shard_map_version select * from t1
+ *   SELECT t1.id, t1.name FROM default.t1
  * The rewritten query received in data node side:
- *   WITH CAST(‘1’, ‘String’) AS _shard_map_version SELECT t1.id, t1.name FROM default.t1
+ *   WITH 'A' AS _sharding_ver SELECT t1.id, t1.name FROM default.t1
  * 
  **/
-std::string MergeTreeDataSelectExecutor::getRequiredPartitionVersionIfExists(const SelectQueryInfo & query_info) const{
+std::optional<std::pair<std::string, std::string>> MergeTreeDataSelectExecutor::getRequiredShardingVerIfExists(const SelectQueryInfo & query_info) const{
     ASTPtr ast = query_info.query;
-    // assert the root ast is ASTSelectQuery
     ASTSelectQuery* select = dynamic_cast<ASTSelectQuery*>(ast.get());
     if(!select){
         LOG_DEBUG(log, "Skipping partition version check for non-select query");
-        return "";
+         return std::nullopt;
     }
+
     ASTPtr with_clause = select->with();
     ASTExpressionList* with_expression = dynamic_cast<ASTExpressionList*>(with_clause.get());
     if(!with_expression){
         LOG_DEBUG(log, "Skipping partition version check without with_clause");
-        return "";
+         return std::nullopt;
     }
 
-    ASTFunction* cast_function = dynamic_cast<ASTFunction*>(with_expression->children[0].get());
-    if(!cast_function || cast_function->name != "CAST"){
-        LOG_DEBUG(log, "Skipping partition version check as cast function is not present");
-        return "";
-    }
-
-    if(cast_function->alias != "_shard_map_version"){
-        LOG_DEBUG(log, "Skipping partition version check as alias _shard_map_version is not found");
-        return "";
-    }
-
-    ASTLiteral* ast_literal = dynamic_cast<ASTLiteral*>(cast_function->arguments->children[0].get());
+    ASTLiteral* ast_literal = dynamic_cast<ASTLiteral*>(with_expression->children[0].get());
     if(!ast_literal){
-        LOG_DEBUG(log, "Skipping partition version check as CAST first argument is not ASTLiteral");
-        return "";
+        LOG_DEBUG(log, "Skipping partition version check as with expression is not ASTLiteral");
+         return std::nullopt;
     }
 
-    // std::string requiredVer = ast_literal->unique_column_name;
+    if(ast_literal->alias != "_sharding_ver"){
+        LOG_DEBUG(log, "Skipping partition version check as alias _sharding_ver is not found");
+         return std::nullopt;
+    }
+
     Field& f = ast_literal->value;
     DB::Field::Types::Which type = f.getType();
     if(type != DB::Field::Types::Which::String){
          LOG_DEBUG(log, "Skipping partition version check as version value is not string type");
-         return "";
+         return std::nullopt;
     }
     std::string requiredVer = f.get<std::string>();
-    return requiredVer;
+    std::optional<std::string> topTableName = getTopTableNameFromQuery(query_info);
+    if(!topTableName){
+        return std::nullopt;
+    }
+    return std::optional<std::pair<std::string, std::string>> (std::make_pair(requiredVer, *topTableName));
 }
 
 
 /**
  * @resharding-support
- * TODO: change return value type
- *   Example dictionary file
-        {"20200508-1", {"1"}},
-        {"20200509-2", {"1", "2"}},
-        {"20200511-6", {"2"}}
  **/ 
-std::set<std::string> MergeTreeDataSelectExecutor::getPartitionVerMap(const Context & context, const std::string& partition_id) const{
-    const ExternalDictionariesLoader & dictionaries_loader = context.getExternalDictionariesLoader();
-    auto partition_ver_dict = dictionaries_loader.getDictionary("default.partition_ver_dict");
+bool MergeTreeDataSelectExecutor::shouldSkipPartition(const Context & context, const std::string& requiredPartitionVer, const std::string& table, const std::string& partition_id) const{
+    // check current shard id from Macros
+    auto macros = context.getMacros();
+    Macros::MacroMap mm = macros->getMacroMap();
+    auto foundShard = mm.find("shard");
+    if(foundShard != mm.end()){
+        LOG_DEBUG(log, "shard id found from Macros: " << foundShard->second);    
+    }else{
+        LOG_DEBUG(log, "shard id not found in Macros");
+        return false;
+    }
+
+    std::shared_ptr<const IDictionaryBase> partition_ver_dict;
+    try{
+        const ExternalDictionariesLoader& dictionaries_loader = context.getExternalDictionariesLoader();
+        partition_ver_dict = dictionaries_loader.getDictionary("default.partition_map_dict");
+    }catch(const DB::Exception& ex){
+        LOG_DEBUG(log, ex.what());
+        return false;
+    }
+
     const IDictionaryBase * dict_ptr = partition_ver_dict.get();
     const auto dict = typeid_cast<const ComplexKeyHashedDictionary *>(dict_ptr);
     if (!dict)
-        return std::set<std::string>(); // empty set
-    auto partition_id_col = ColumnString::create();
-    partition_id_col->insert(partition_id);
-    ColumnString::Ptr immutable_ptr = std::move(partition_id_col);
-    Columns key_columns;
-    key_columns.push_back(immutable_ptr);
-    DataTypes key_types;
-    key_types.push_back(std::make_shared<DataTypeString>());
-    auto out = ColumnString::create();
-    String attr_name = "versions";    
-    dict->getString(attr_name, key_columns, key_types, out.get());
-    std::string supportedVersions = out->getDataAt(0).toString();
+        return false;
 
-    std::set<std::string> setOfVersions;
-    if(!supportedVersions.empty()){
-        LOG_DEBUG(log, "SupportedVersions: " << supportedVersions << " for partition: " << partition_id);
-        std::size_t pos = 0;
-        std::size_t separator_pos = supportedVersions.find_first_of('|');
-        while(separator_pos != std::string::npos){
-            setOfVersions.insert(supportedVersions.substr(pos, separator_pos-pos));
-            pos = separator_pos+1;
-            separator_pos = supportedVersions.find_first_of('|', pos);
-        }
-        setOfVersions.insert(supportedVersions.substr(pos));
-    }else{
-        LOG_WARNING(log, "SupportedVersions is empty for partition: " << partition_id);
+    // split partitionId to date and rangeid
+    std::size_t pos = partition_id.find_first_of('-');
+    if(pos == std::string::npos){
+        LOG_ERROR(log, "partition id does not contain '-'");
+        return false;
     }
-    return setOfVersions;
+
+    std::string date = partition_id.substr(0, pos);
+    std::string rangeId = partition_id.substr(pos+1);
+
+    Columns key_columns;
+    DataTypes key_types;
+
+    // column 'table'
+    auto key_tablename = ColumnString::create();
+    key_tablename->insert(table);
+    ColumnString::Ptr immutable_ptr_key_tablename = std::move(key_tablename);
+    key_columns.push_back(immutable_ptr_key_tablename);
+    key_types.push_back(std::make_shared<DataTypeString>());
+
+    // column 'date'
+    auto key_date = ColumnString::create();
+    key_date->insert(date);
+    ColumnString::Ptr immutable_ptr_key_date = std::move(key_date);
+    key_columns.push_back(immutable_ptr_key_date);
+    key_types.push_back(std::make_shared<DataTypeString>());
+
+    // column 'range_id'
+    auto key_rangeid = ColumnUInt32::create();
+    key_rangeid->insert(std::stoi(rangeId));
+    ColumnUInt32::Ptr immutable_ptr_key_rangeid = std::move(key_rangeid);
+    key_columns.push_back(immutable_ptr_key_rangeid);
+    key_types.push_back(std::make_shared<DataTypeUInt32>());
+
+    // TODO we should use shard id as number
+    // column 'A' - 'F' to get shard id
+    // auto out = ColumnUInt32::create();
+    // PaddedPODArray<UInt32> out(1);
+    // String attr_name = activeVersion;    
+    // dict->getUInt32(attr_name, key_columns, key_types, out);
+    // UInt32 shardId = out.front();
+
+    // column 'A' - 'F' to get shard id
+    auto out = ColumnString::create();
+    String attr_name = requiredPartitionVer;    
+    dict->getString(attr_name, key_columns, key_types, out.get());
+    std::string shardId = out->getDataAt(0).toString();
+    if(shardId.empty()){
+        LOG_DEBUG(log, "shard not found in dictionary for requiredPartitionVer: " << requiredPartitionVer 
+            << ", table: " << table << ", date: " << date << ", rangeid: " << rangeId);
+        return false;
+    }
+    LOG_DEBUG(log, "Found shard: " << shardId);
+
+    return foundShard->second != shardId;
 }
 
 
@@ -360,18 +422,20 @@ Pipes MergeTreeDataSelectExecutor::readFromParts(
     }
 
     // check current shard id from Macros
-    auto macros = context.getMacros();
-    Macros::MacroMap mm = macros->getMacroMap();
-    auto foundShard = mm.find("shard");
-    if(foundShard != mm.end()){
-        LOG_DEBUG(log, "shard id: " << foundShard->second);    
-    }else{
-        LOG_DEBUG(log, "shard id not found in Macros");    
-    }
+    // auto macros = context.getMacros();
+    // Macros::MacroMap mm = macros->getMacroMap();
+    // auto foundShard = mm.find("shard");
+    // if(foundShard != mm.end()){
+    //     LOG_DEBUG(log, "shard id: " << foundShard->second);    
+    // }else{
+    //     LOG_DEBUG(log, "shard id not found in Macros");    
+    // }
     
     // check version match for this part
-    std::string requiredPartitionVer = getRequiredPartitionVersionIfExists(query_info);
-    LOG_DEBUG(log, "Required partiton version: " << requiredPartitionVer);          
+    std::optional<std::pair<std::string, std::string>> requiredPartitionVer = getRequiredShardingVerIfExists(query_info);
+    if(requiredPartitionVer){
+        LOG_DEBUG(log, "Required partiton version: " << (*requiredPartitionVer).first << ", table: " << (*requiredPartitionVer).second);          
+    }
     /// Select the parts in which there can be data that satisfy `minmax_idx_condition` and that match the condition on `_part`,
     ///  as well as `max_block_number_to_read`.
     {
@@ -398,11 +462,10 @@ Pipes MergeTreeDataSelectExecutor::readFromParts(
             }
 
             // skip partitions which are not required by current global version
-            if(!requiredPartitionVer.empty()){
+            if(requiredPartitionVer){
                 std::string partitionId = part->info.partition_id;
                 LOG_DEBUG(log, "Examining part: " << part->name << " of partition : " << partitionId);
-                std::set<std::string> setOfVersions = getPartitionVerMap(context, partitionId);
-                if(!setOfVersions.contains(requiredPartitionVer)){
+                if(shouldSkipPartition(context, (*requiredPartitionVer).first, (*requiredPartitionVer).second, partitionId)){
                     LOG_DEBUG(log, "Skipping part: " << part->name << " of partition : " << partitionId);
                     continue;
                 }

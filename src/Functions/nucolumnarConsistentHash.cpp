@@ -52,10 +52,10 @@ public:
 
     static FunctionPtr create(const Context & context)
     {
-        return std::make_shared<NuColumnarConsistentHash>(context.getExternalDictionariesLoader());
+        return std::make_shared<NuColumnarConsistentHash>(context.getExternalDictionariesLoader(), context);
     }
 
-    NuColumnarConsistentHash(const ExternalDictionariesLoader & dictionaries_loader_) : dictionaries_loader(dictionaries_loader_) {}
+    NuColumnarConsistentHash(const ExternalDictionariesLoader & dictionaries_loader_, const Context & context_) : dictionaries_loader(dictionaries_loader_), context(context_) {}
 
     String getName() const override { return name; }
 
@@ -133,18 +133,25 @@ public:
     }
 private:
     UInt32 lookupShard(const std::string& table, UInt32 date, UInt32 rangeId, const std::string& activeVersion){
+        LOG_DEBUG(log, "query context" << (context.hasQueryContext() ? "query context exists" : "query context missing"));
+        auto getDebugContext = [&](){
+            std::ostringstream oss;
+            oss << "table: " << table << ", date: " << date << ", rangeId: " << rangeId << ", activeVersion: " << activeVersion;
+            return oss.str();
+        };
+        
         std::shared_ptr<const IDictionaryBase> partition_ver_dict;
         try{
             partition_ver_dict = dictionaries_loader.getDictionary("default.partition_map_dict");
         }catch(const DB::Exception& ex){
-            LOG_DEBUG(log, ex.what());
-            throw Exception{"Shard not found as dictionary partition_map_dict can't be loaded", ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
+            LOG_DEBUG(log, ex.what() << ", for " << getDebugContext());
+            throw Exception{"Shard not found as dictionary partition_map_dict can't be loaded for " + getDebugContext(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
         }
 
         const IDictionaryBase * dict_ptr = partition_ver_dict.get();
         const auto dict = typeid_cast<const ComplexKeyHashedDictionary *>(dict_ptr);
         if (!dict)
-           throw Exception{"Shard not found as dictionary partition_map_dict is not available", ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
+           throw Exception{"Shard not found as dictionary partition_map_dict is not available for " + getDebugContext(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
 
         Columns key_columns;
         DataTypes key_types;
@@ -183,13 +190,17 @@ private:
         String attr_name = activeVersion;    
         dict->getString(attr_name, key_columns, key_types, out.get());
         std::string shardId = out->getDataAt(0).toString();
-        LOG_DEBUG(log, "Found shard: " << shardId << " for table: " << table << ", date: " << date << ", rangeId: " << rangeId << ", activeVersion: " << activeVersion);
+        if(shardId.empty()){
+            throw Exception{"Shard not found in dictionary partition_map_dict for " + getDebugContext(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
+        }
+        LOG_DEBUG(log, "Found shard: " << shardId << " for " << getDebugContext());
 
         return static_cast<UInt32>(std::stoi(shardId));
     }
 
 private:
     const ExternalDictionariesLoader & dictionaries_loader;
+    const Context & context;
 
     Logger * log = &Logger::get("NuColumnarConsistentHash");
 };

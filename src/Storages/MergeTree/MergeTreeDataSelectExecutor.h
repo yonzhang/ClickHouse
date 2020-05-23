@@ -105,16 +105,15 @@ private:
 
     /**
      * @resharding-support
-     * get shardmapping version from with clause, normally it is like this
-     *  with '125' _shard_map_version
-     * where 125 is the version which query uses
+     * @return a pair of _sharding_ver and top-level table name from rewritten query 
      **/
-    std::string getRequiredPartitionVersionIfExists(const SelectQueryInfo & query_info) const;
-
+    std::optional<std::pair<std::string, std::string>> getRequiredShardingVerIfExists(const SelectQueryInfo & query_info) const;
     /*
      * @resharding-support
+     * 
+     * @return true when this partition should be skipped, false otherwise
      */
-    std::set<std::string> getPartitionVerMap(const Context & context, const std::string& partition_id) const;
+    bool shouldSkipPartition(const Context & context, const std::string& requiredShardingVer, const std::string& table, const std::string& partition_id) const;
 };
 
 }
