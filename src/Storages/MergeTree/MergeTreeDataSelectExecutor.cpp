@@ -234,6 +234,7 @@ bool MergeTreeDataSelectExecutor::shouldSkipPartition(const Context & context, c
         LOG_DEBUG(log, "shard id not found in Macros");
         return false;
     }
+    UInt32 selfShard = std::stoi(foundShard->second);
 
     std::shared_ptr<const IDictionaryBase> partition_ver_dict;
     try{
@@ -283,27 +284,15 @@ bool MergeTreeDataSelectExecutor::shouldSkipPartition(const Context & context, c
     key_columns.push_back(immutable_ptr_key_rangeid);
     key_types.push_back(std::make_shared<DataTypeUInt32>());
 
-    // TODO we should use shard id as number
     // column 'A' - 'F' to get shard id
-    // auto out = ColumnUInt32::create();
-    // PaddedPODArray<UInt32> out(1);
-    // String attr_name = activeVersion;    
-    // dict->getUInt32(attr_name, key_columns, key_types, out);
-    // UInt32 shardId = out.front();
-
-    // column 'A' - 'F' to get shard id
-    auto out = ColumnString::create();
+    PaddedPODArray<UInt32> out(1);
     String attr_name = requiredPartitionVer;    
-    dict->getString(attr_name, key_columns, key_types, out.get());
-    std::string shardId = out->getDataAt(0).toString();
-    if(shardId.empty()){
-        LOG_DEBUG(log, "shard not found in dictionary for requiredPartitionVer: " << requiredPartitionVer 
-            << ", table: " << table << ", date: " << date << ", rangeid: " << rangeId);
-        return false;
-    }
+    dict->getUInt32(attr_name, key_columns, key_types, out);
+    UInt32 shardId = out.front();
+
     LOG_DEBUG(log, "Found shard: " << shardId);
 
-    return foundShard->second != shardId;
+    return selfShard != shardId;
 }
 
 
@@ -421,17 +410,7 @@ Pipes MergeTreeDataSelectExecutor::readFromParts(
         }
     }
 
-    // check current shard id from Macros
-    // auto macros = context.getMacros();
-    // Macros::MacroMap mm = macros->getMacroMap();
-    // auto foundShard = mm.find("shard");
-    // if(foundShard != mm.end()){
-    //     LOG_DEBUG(log, "shard id: " << foundShard->second);    
-    // }else{
-    //     LOG_DEBUG(log, "shard id not found in Macros");    
-    // }
-    
-    // check version match for this part
+    // parse required sharding version and table name
     std::optional<std::pair<std::string, std::string>> requiredPartitionVer = getRequiredShardingVerIfExists(query_info);
     if(requiredPartitionVer){
         LOG_DEBUG(log, "Required partiton version: " << (*requiredPartitionVer).first << ", table: " << (*requiredPartitionVer).second);          

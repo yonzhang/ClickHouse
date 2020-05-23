@@ -139,7 +139,7 @@ private:
             oss << "table: " << table << ", date: " << date << ", rangeId: " << rangeId << ", activeVersion: " << activeVersion;
             return oss.str();
         };
-        
+
         std::shared_ptr<const IDictionaryBase> partition_ver_dict;
         try{
             partition_ver_dict = dictionaries_loader.getDictionary("default.partition_map_dict");
@@ -177,25 +177,14 @@ private:
         key_columns.push_back(immutable_ptr_key_rangeid);
         key_types.push_back(std::make_shared<DataTypeUInt32>());
 
-        // TODO we should use shard id as number
         // column 'A' - 'F' to get shard id
-        // auto out = ColumnUInt32::create();
-        // PaddedPODArray<UInt32> out(1);
-        // String attr_name = activeVersion;    
-        // dict->getUInt32(attr_name, key_columns, key_types, out);
-        // UInt32 shardId = out.front();
-
-        // column 'A' - 'F' to get shard id
-        auto out = ColumnString::create();
+        PaddedPODArray<UInt32> out(1);
         String attr_name = activeVersion;    
-        dict->getString(attr_name, key_columns, key_types, out.get());
-        std::string shardId = out->getDataAt(0).toString();
-        if(shardId.empty()){
-            throw Exception{"Shard not found in dictionary partition_map_dict for " + getDebugContext(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
-        }
-        LOG_DEBUG(log, "Found shard: " << shardId << " for " << getDebugContext());
+        dict->getUInt32(attr_name, key_columns, key_types, out);
+        UInt32 shardId = out.front();
 
-        return static_cast<UInt32>(std::stoi(shardId));
+        LOG_DEBUG(log, "Found shard: " << shardId << " for " << getDebugContext());
+        return static_cast<UInt32>(shardId);
     }
 
 private:
