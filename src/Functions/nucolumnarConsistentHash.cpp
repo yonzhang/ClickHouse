@@ -20,6 +20,7 @@
 #include <Interpreters/ExternalDictionariesLoader.h>
 #include <Dictionaries/ComplexKeyHashedDictionary.h>
 #include <Interpreters/Context.h>
+#include <Resharding/ReshardingUtils.h>
 
 namespace DB
 {
@@ -124,7 +125,7 @@ public:
         const auto * rangeid_col_val = checkAndGetColumn<ColumnUInt32>(rangeid_col); 
         LOG_DEBUG(log, "column 2" << ": name=" << rangeid_col->getName() << ", type=UInt32" << ", value=" << rangeid_col_val->getElement(0));
 
-        UInt32 shard = lookupShard(table, date_col_val->getElement(0), rangeid_col_val->getElement(0), "A");
+        UInt32 shard = lookupShard(table, date_col_val->getElement(0), rangeid_col_val->getElement(0));
         
         auto c_res = ColumnUInt32::create();
         auto & data = c_res->getData();
@@ -132,59 +133,78 @@ public:
         block.getByPosition(result).column = std::move(c_res);
     }
 private:
-    UInt32 lookupShard(const std::string& table, UInt32 date, UInt32 rangeId, const std::string& activeVersion){
-        LOG_DEBUG(log, "query context" << (context.hasQueryContext() ? "query context exists" : "query context missing"));
-        auto getDebugContext = [&](){
-            std::ostringstream oss;
-            oss << "table: " << table << ", date: " << date << ", rangeId: " << rangeId << ", activeVersion: " << activeVersion;
-            return oss.str();
-        };
+    UInt32 lookupShard(const std::string& table, UInt32 date, UInt32 rangeId){
+        std::optional<std::string> activeVerColumn = ReshardingUtils::findActiveShardingVersionIfExists(context, table);
 
-        std::shared_ptr<const IDictionaryBase> partition_ver_dict;
-        try{
-            partition_ver_dict = dictionaries_loader.getDictionary("default.partition_map_dict");
-        }catch(const DB::Exception& ex){
-            LOG_DEBUG(log, ex.what() << ", for " << getDebugContext());
-            throw Exception{"Shard not found as dictionary partition_map_dict can't be loaded for " + getDebugContext(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
+        if(!activeVerColumn){
+            std::ostringstream err;
+            err << "active version column not found for NuColumnarConsistentHash for {table: " << table << ", date: " << date << 
+                ", range_id: " << rangeId;
+            throw Exception(err.str(), ErrorCodes::ILLEGAL_COLUMN);
         }
 
-        const IDictionaryBase * dict_ptr = partition_ver_dict.get();
-        const auto dict = typeid_cast<const ComplexKeyHashedDictionary *>(dict_ptr);
-        if (!dict)
-           throw Exception{"Shard not found as dictionary partition_map_dict is not available for " + getDebugContext(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
+        std::optional<UInt32> shard = ReshardingUtils::findShardIfExists(context, table, date, rangeId, *activeVerColumn);
 
-        Columns key_columns;
-        DataTypes key_types;
+         if(!shard){
+            std::ostringstream err;
+            err << "shard not found for NuColumnarConsistentHash for {table: " << table << ", date: " << date <<
+                ", range_id: " << rangeId << ", activeVerColumn: " << *activeVerColumn;
+            throw Exception(err.str(), ErrorCodes::ILLEGAL_COLUMN);
+        }
 
-        // column 'table'
-        auto key_tablename = ColumnString::create();
-        key_tablename->insert(table);
-        ColumnString::Ptr immutable_ptr_key_tablename = std::move(key_tablename);
-        key_columns.push_back(immutable_ptr_key_tablename);
-        key_types.push_back(std::make_shared<DataTypeString>());
+        return *shard;
+        // LOG_DEBUG(log, "query context" << (context.hasQueryContext() ? "query context exists" : "query context missing"));
+        // auto getDebugContext = [&](){
+        //     std::ostringstream oss;
+        //     oss << "table: " << table << ", date: " << date << ", rangeId: " << rangeId << ", activeVersion: " << activeVersion;
+        //     return oss.str();
+        // };
 
-        // column 'date'
-        auto key_date = ColumnString::create();
-        key_date->insert(std::to_string(date));
-        ColumnString::Ptr immutable_ptr_key_date = std::move(key_date);
-        key_columns.push_back(immutable_ptr_key_date);
-        key_types.push_back(std::make_shared<DataTypeString>());
+        // std::shared_ptr<const IDictionaryBase> partition_ver_dict;
+        // try{
+        //     partition_ver_dict = dictionaries_loader.getDictionary("default.partition_map_dict");
+        // }catch(const DB::Exception& ex){
+        //     LOG_DEBUG(log, ex.what() << ", for " << getDebugContext());
+        //     throw Exception{"Shard not found as dictionary partition_map_dict can't be loaded for " + getDebugContext(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
+        // }
 
-        // column 'range_id'
-        auto key_rangeid = ColumnUInt32::create();
-        key_rangeid->insert(rangeId);
-        ColumnUInt32::Ptr immutable_ptr_key_rangeid = std::move(key_rangeid);
-        key_columns.push_back(immutable_ptr_key_rangeid);
-        key_types.push_back(std::make_shared<DataTypeUInt32>());
+        // const IDictionaryBase * dict_ptr = partition_ver_dict.get();
+        // const auto dict = typeid_cast<const ComplexKeyHashedDictionary *>(dict_ptr);
+        // if (!dict)
+        //    throw Exception{"Shard not found as dictionary partition_map_dict is not available for " + getDebugContext(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
 
-        // column 'A' - 'F' to get shard id
-        PaddedPODArray<UInt32> out(1);
-        String attr_name = activeVersion;    
-        dict->getUInt32(attr_name, key_columns, key_types, out);
-        UInt32 shardId = out.front();
+        // Columns key_columns;
+        // DataTypes key_types;
 
-        LOG_DEBUG(log, "Found shard: " << shardId << " for " << getDebugContext());
-        return static_cast<UInt32>(shardId);
+        // // column 'table'
+        // auto key_tablename = ColumnString::create();
+        // key_tablename->insert(table);
+        // ColumnString::Ptr immutable_ptr_key_tablename = std::move(key_tablename);
+        // key_columns.push_back(immutable_ptr_key_tablename);
+        // key_types.push_back(std::make_shared<DataTypeString>());
+
+        // // column 'date'
+        // auto key_date = ColumnString::create();
+        // key_date->insert(std::to_string(date));
+        // ColumnString::Ptr immutable_ptr_key_date = std::move(key_date);
+        // key_columns.push_back(immutable_ptr_key_date);
+        // key_types.push_back(std::make_shared<DataTypeString>());
+
+        // // column 'range_id'
+        // auto key_rangeid = ColumnUInt32::create();
+        // key_rangeid->insert(rangeId);
+        // ColumnUInt32::Ptr immutable_ptr_key_rangeid = std::move(key_rangeid);
+        // key_columns.push_back(immutable_ptr_key_rangeid);
+        // key_types.push_back(std::make_shared<DataTypeUInt32>());
+
+        // // column 'A' - 'F' to get shard id
+        // PaddedPODArray<UInt32> out(1);
+        // String attr_name = activeVersion;    
+        // dict->getUInt32(attr_name, key_columns, key_types, out);
+        // UInt32 shardId = out.front();
+
+        // LOG_DEBUG(log, "Found shard: " << shardId << " for " << getDebugContext());
+        // return static_cast<UInt32>(shardId);
     }
 
 private:
