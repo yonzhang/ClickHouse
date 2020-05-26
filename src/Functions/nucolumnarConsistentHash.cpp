@@ -34,17 +34,34 @@ namespace ErrorCodes
 /**
  * @resharding-support
  * 
- *
+ * One consistent hashing algorithm to choose shards based on date field and other fields
+ * 
  * This consistent hashing algorithm has 2 benefits in case of resharding
  *  - moving less keys
  *  - copy Clickhouse partition without affecting live traffic
- * Sharding expression is (f_date, f1, f2, ...) where f_date a Date type column, f1, f2, ... are columns with any type
- * Partition expression is same as sharding expression
+ * 
+ * Sharding expression is NuColumnarConsistentHash('<table_name>', toYYYYMMDD(<date_field>), NuColumnarHashRange(<other_fields>))
+ * 
+ * Sharding metadata is stored in dictionary called sharding_version_dict, which has below schema
+ * 
+ *  CREATE DICTIONARY sharding_version_dict
+    (
+        table String,
+        date String,
+        range_id UInt32,
+        active_ver String,
+        A UInt32,
+        B UInt32,
+        C UInt32,
+        D UInt32,
+        E UInt32,
+        F UInt32
+    )
+    PRIMARY KEY table, date, range_id
  * 
  * Algorithm to choose shard
- * 1) Build in-memory map from (f_date, hash_range) to shard id, where hash_range is hash of concatenated of columns f1, f2, ...
- *     This map could be rooted in a dictionary or in a file system which is periodically populated
- * 2) In query time, calculate f_date and hash_range and lookup the map to get target shard
+ * 1) read current active version column from the fixed entry {<table_name>, '00000000', 0}
+ * 2) read shard id from active column from the entry {<table_name>, toYYYYMMDD(<date_field>), NuColumnarHashRange(<other_fields>)}
  **/        
 class NuColumnarConsistentHash : public IFunction
 {
@@ -53,10 +70,10 @@ public:
 
     static FunctionPtr create(const Context & context)
     {
-        return std::make_shared<NuColumnarConsistentHash>(context.getExternalDictionariesLoader(), context);
+        return std::make_shared<NuColumnarConsistentHash>(context);
     }
 
-    NuColumnarConsistentHash(const ExternalDictionariesLoader & dictionaries_loader_, const Context & context_) : dictionaries_loader(dictionaries_loader_), context(context_) {}
+    NuColumnarConsistentHash(const Context & context_) : context(context_) {}
 
     String getName() const override { return name; }
 
@@ -153,62 +170,9 @@ private:
         }
 
         return *shard;
-        // LOG_DEBUG(log, "query context" << (context.hasQueryContext() ? "query context exists" : "query context missing"));
-        // auto getDebugContext = [&](){
-        //     std::ostringstream oss;
-        //     oss << "table: " << table << ", date: " << date << ", rangeId: " << rangeId << ", activeVersion: " << activeVersion;
-        //     return oss.str();
-        // };
-
-        // std::shared_ptr<const IDictionaryBase> partition_ver_dict;
-        // try{
-        //     partition_ver_dict = dictionaries_loader.getDictionary("default.partition_map_dict");
-        // }catch(const DB::Exception& ex){
-        //     LOG_DEBUG(log, ex.what() << ", for " << getDebugContext());
-        //     throw Exception{"Shard not found as dictionary partition_map_dict can't be loaded for " + getDebugContext(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
-        // }
-
-        // const IDictionaryBase * dict_ptr = partition_ver_dict.get();
-        // const auto dict = typeid_cast<const ComplexKeyHashedDictionary *>(dict_ptr);
-        // if (!dict)
-        //    throw Exception{"Shard not found as dictionary partition_map_dict is not available for " + getDebugContext(), ErrorCodes::ILLEGAL_TYPE_OF_ARGUMENT};
-
-        // Columns key_columns;
-        // DataTypes key_types;
-
-        // // column 'table'
-        // auto key_tablename = ColumnString::create();
-        // key_tablename->insert(table);
-        // ColumnString::Ptr immutable_ptr_key_tablename = std::move(key_tablename);
-        // key_columns.push_back(immutable_ptr_key_tablename);
-        // key_types.push_back(std::make_shared<DataTypeString>());
-
-        // // column 'date'
-        // auto key_date = ColumnString::create();
-        // key_date->insert(std::to_string(date));
-        // ColumnString::Ptr immutable_ptr_key_date = std::move(key_date);
-        // key_columns.push_back(immutable_ptr_key_date);
-        // key_types.push_back(std::make_shared<DataTypeString>());
-
-        // // column 'range_id'
-        // auto key_rangeid = ColumnUInt32::create();
-        // key_rangeid->insert(rangeId);
-        // ColumnUInt32::Ptr immutable_ptr_key_rangeid = std::move(key_rangeid);
-        // key_columns.push_back(immutable_ptr_key_rangeid);
-        // key_types.push_back(std::make_shared<DataTypeUInt32>());
-
-        // // column 'A' - 'F' to get shard id
-        // PaddedPODArray<UInt32> out(1);
-        // String attr_name = activeVersion;    
-        // dict->getUInt32(attr_name, key_columns, key_types, out);
-        // UInt32 shardId = out.front();
-
-        // LOG_DEBUG(log, "Found shard: " << shardId << " for " << getDebugContext());
-        // return static_cast<UInt32>(shardId);
     }
 
 private:
-    const ExternalDictionariesLoader & dictionaries_loader;
     const Context & context;
 
     Logger * log = &Logger::get("NuColumnarConsistentHash");
@@ -219,7 +183,7 @@ private:
 /**
  *  hashCombine input arguments and return an integer to indicate
  *  This function is used as below
- *   nuColumnarHashRange(f1, f2, ...)
+ *   NuColumnarHashRange(f1, f2, ...)
  * it uses boost hashCombine to compute a hash value with std::size_t type,
  *   then lookup bucket id by the hash value. The lookup is on a fixed number of
  *   array whose element is sorted hash range.
@@ -274,7 +238,7 @@ public:
         block.getByPosition(result).column = std::move(c_res);
     }
 
-    // iterate from the 2nd argument and doing hash
+    // TODO support all possible data types
     std::size_t concatenatedHash(Block & block, const ColumnNumbers & arguments){
         std::size_t seed = 0;
         for(std::vector<size_t>::size_type i=0; i<arguments.size(); i++){
