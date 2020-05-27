@@ -114,8 +114,8 @@ std::optional<UInt32> ReshardingUtils::findShardIfExists(const ExternalDictionar
     dict->getUInt32(activeVerColumn, key_columns, key_types, out);
     UInt32 shardId = out.front();
 
-    LOG_DEBUG(&Logger::get("ReshardingUtils"), "Found shard: " << shardId << " for " << getDebugContext());
-    return std::optional<UInt32> {shardId};
+    // shardId is number starting from 1 and 0 is used for non-existence of the specified entry.
+    return shardId == 0 ? std::nullopt : std::optional<UInt32> {shardId};
 }
 
 }

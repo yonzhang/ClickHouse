@@ -160,9 +160,6 @@ private:
             throw Exception(err.str(), ErrorCodes::ILLEGAL_COLUMN);
         }
 
-        // put activeVerColumn to query context for later use in executeQuery
-        CurrentThread::setActiveVerColumn(*activeVerColumn);
-
         std::optional<UInt32> shard = ReshardingUtils::findShardIfExists(dictionaries_loader, table, date, rangeId, *activeVerColumn);
 
          if(!shard){
@@ -172,7 +169,11 @@ private:
             throw Exception(err.str(), ErrorCodes::ILLEGAL_COLUMN);
         }
 
-        return *shard;
+        // put activeVerColumn to query context for later use in executeQuery
+        CurrentThread::setActiveVerColumn(*activeVerColumn);
+
+        // shard index starting from 0, used for mod by number of shards
+        return (*shard - 1);
     }
 
 private:

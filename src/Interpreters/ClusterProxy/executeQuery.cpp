@@ -44,14 +44,59 @@ Context removeUserRestrictionsFromSettings(const Context & context, const Settin
     return new_context;
 }
 
-//@resharding-support
-static std::optional<std::string> findActiveShardingMapVersionIfExists(const Context & context){
-    /// check if activeVerCol exists in query_context
-    if(context.hasQueryContext()){
-        std::string activeVerCol = context.getQueryContext().getActiveVerColumn();
-        return activeVerCol.empty() ? std::nullopt : std::optional<std::string>(activeVerCol);
-    }else
+/**
+ * @resharding-support
+ * We need read activeVerCol from dictionary because it is possible that activeVerCol is not available in query context as below
+ * 1) query does not match sharding_key expression NuColumnarConsistentHash, so activeVerCol is not preset
+ * 2) query is not for tables with sharding_key expression NuColumnarConsistentHash
+ * 
+ * This could be an expensive operation because it parses the query and read from dictionary, we should have a flag to explictly
+ * tell if we really need perform a version check.
+ * 
+ **/ 
+static std::optional<std::string> findActiveVerColFromDictionaryIfExists(const Context & context, const ASTPtr & query_ast){
+    const ASTSelectQuery & select = query_ast->as<ASTSelectQuery &>();
+    if (!select.tables())
         return std::nullopt;
+
+    const auto & tables_in_select_query = select.tables()->as<ASTTablesInSelectQuery &>();
+    if (tables_in_select_query.children.empty())
+        return std::nullopt;
+
+    const auto & tables_element = tables_in_select_query.children[0]->as<ASTTablesInSelectQueryElement &>();
+    if (!tables_element.table_expression)
+        return std::nullopt;
+
+    const auto& table_expr = tables_element.table_expression->as<ASTTableExpression>();
+    if(!table_expr->database_and_table_name)
+        return std::nullopt;
+
+    const auto& db_table = table_expr->database_and_table_name->as<ASTIdentifier>();
+
+    return ReshardingUtils::findActiveShardingVersionIfExists(context.getExternalDictionariesLoader(), db_table->name);
+}
+
+/**
+ * @resharding-support
+ * The algorithm to find activeVerCol
+ * 1) First read it from query context if that is previously set by NuColumnarConsistentHashing function during sharding selection
+ * 2) If activeVerCol does not exist in query context, it implies this is query going to all the shards, so here needs to 
+ *    read activeVerCol from dictionary sharding_version_dict
+ **/
+static std::optional<std::string> findActiveVerColumnIfExists(const Context & context, const ASTPtr & query_ast){
+    /// check if activeVerCol exists in query_context. 
+    /// NuColumnarConsistentHashing function may set activeVerCol in query context before this
+    std::string activeVerCol;
+    if(context.hasQueryContext()){
+        activeVerCol = context.getQueryContext().getActiveVerColumn();
+    }
+    
+    if(!activeVerCol.empty()){
+        return std::optional<std::string>(activeVerCol);
+    }else{
+        // try to fetch active version column from dictionary based on current table
+        return findActiveVerColFromDictionaryIfExists(context, query_ast);
+    }
 }
 
 Pipes executeQuery(
@@ -79,7 +124,7 @@ Pipes executeQuery(
         throttler = user_level_throttler;
 
     //@resharding-support: rewrite query with active version for snapshot query if needed
-    auto foundVer = findActiveShardingMapVersionIfExists(context);
+    auto foundVer = findActiveVerColumnIfExists(context, query_ast);
     if(foundVer){
         LOG_DEBUG(&Logger::get("ClusterProxy::executeQuery"), "found active sharding version: " << *foundVer);
         VirtualColumnUtils::rewriteEntityInAst(query_ast, "_sharding_ver", *foundVer);
