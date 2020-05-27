@@ -70,10 +70,10 @@ public:
 
     static FunctionPtr create(const Context & context)
     {
-        return std::make_shared<NuColumnarConsistentHash>(context);
+        return std::make_shared<NuColumnarConsistentHash>(context.getExternalDictionariesLoader());
     }
 
-    NuColumnarConsistentHash(const Context & context_) : context(context_) {}
+    NuColumnarConsistentHash(const ExternalDictionariesLoader & dictionaries_loader_) : dictionaries_loader(dictionaries_loader_) {}
 
     String getName() const override { return name; }
 
@@ -151,7 +151,7 @@ public:
     }
 private:
     UInt32 lookupShard(const std::string& table, UInt32 date, UInt32 rangeId){
-        std::optional<std::string> activeVerColumn = ReshardingUtils::findActiveShardingVersionIfExists(context, table);
+        std::optional<std::string> activeVerColumn = ReshardingUtils::findActiveShardingVersionIfExists(dictionaries_loader, table);
 
         if(!activeVerColumn){
             std::ostringstream err;
@@ -160,7 +160,10 @@ private:
             throw Exception(err.str(), ErrorCodes::ILLEGAL_COLUMN);
         }
 
-        std::optional<UInt32> shard = ReshardingUtils::findShardIfExists(context, table, date, rangeId, *activeVerColumn);
+        // put activeVerColumn to query context for later use in executeQuery
+        CurrentThread::setActiveVerColumn(*activeVerColumn);
+
+        std::optional<UInt32> shard = ReshardingUtils::findShardIfExists(dictionaries_loader, table, date, rangeId, *activeVerColumn);
 
          if(!shard){
             std::ostringstream err;
@@ -173,8 +176,7 @@ private:
     }
 
 private:
-    const Context & context;
-
+    const ExternalDictionariesLoader & dictionaries_loader;
     Logger * log = &Logger::get("NuColumnarConsistentHash");
 };
 

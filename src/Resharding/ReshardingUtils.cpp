@@ -11,10 +11,9 @@ namespace DB
 
 const std::string ReshardingUtils::_SHARDING_VERSION_DICTIONARY = "default.sharding_version_dict";
 
-std::optional<std::string> ReshardingUtils::findActiveShardingVersionIfExists(const Context & context, const std::string& db_table_name){
+std::optional<std::string> ReshardingUtils::findActiveShardingVersionIfExists(const ExternalDictionariesLoader & dictionaries_loader, const std::string& db_table_name){
     std::shared_ptr<const IDictionaryBase> partition_ver_dict;
     try{
-        const ExternalDictionariesLoader & dictionaries_loader = context.getExternalDictionariesLoader();
         partition_ver_dict = dictionaries_loader.getDictionary(_SHARDING_VERSION_DICTIONARY);
     }catch(const DB::Exception& ex){
         LOG_DEBUG(&Logger::get("ReshardingUtils"), ex.what());
@@ -64,7 +63,7 @@ std::optional<std::string> ReshardingUtils::findActiveShardingVersionIfExists(co
     return std::optional<std::string>(active_ver);
 }
 
-std::optional<UInt32> ReshardingUtils::findShardIfExists(const Context & context, const std::string& table, UInt32 date, UInt32 rangeId, const std::string& activeVerColumn){
+std::optional<UInt32> ReshardingUtils::findShardIfExists(const ExternalDictionariesLoader & dictionaries_loader, const std::string& table, UInt32 date, UInt32 rangeId, const std::string& activeVerColumn){
     auto getDebugContext = [&](){
         std::ostringstream oss;
         oss << "from column: " << activeVerColumn <<  ", for {table: " << table << ", date: " << date << ", rangeId: " << rangeId << "}";
@@ -73,7 +72,6 @@ std::optional<UInt32> ReshardingUtils::findShardIfExists(const Context & context
 
     std::shared_ptr<const IDictionaryBase> partition_ver_dict;
     try{
-        const ExternalDictionariesLoader & dictionaries_loader = context.getExternalDictionariesLoader();
         partition_ver_dict = dictionaries_loader.getDictionary(_SHARDING_VERSION_DICTIONARY);
     }catch(const DB::Exception& ex){
         LOG_DEBUG(&Logger::get("ReshardingUtils"), ex.what() << ", " << getDebugContext());

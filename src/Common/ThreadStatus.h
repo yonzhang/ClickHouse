@@ -154,6 +154,9 @@ public:
     /// Detaches thread from the thread group and the query, dumps performance counters if they have not been dumped
     void detachQuery(bool exit_if_already_detached = false, bool thread_exits = false);
 
+    /// @resharding-support set active verion column to query context
+    void setActiveVerColumn(const std::string& activeVerCol);
+
 protected:
     void initPerformanceCounters();
 

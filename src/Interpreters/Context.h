@@ -208,7 +208,7 @@ private:
     Context();
 
     //@resharding-support
-    std::string sharding_version;
+    std::string activeVerCol;
 public:
     /// Create initial Context with ContextShared and etc.
     static Context createGlobal(ContextShared * shared);
@@ -264,8 +264,8 @@ public:
     Strings getEnabledRolesNames() const;
 
     //@resharding-support
-    std::string getShardingVer() const;
-    void setShardingVer(const std::string& shardingVer);
+    std::string getActiveVerColumn() const;
+    void setActiveVerColumn(const std::string& activeVerCol);
 
     /// Checks access rights.
     /// Empty database means the current database.

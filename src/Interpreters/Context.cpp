@@ -698,13 +698,13 @@ std::optional<UUID> Context::getUserID() const
 }
 
 //@resharding-support
-std::string Context::getShardingVer() const{
-    return sharding_version;
+std::string Context::getActiveVerColumn() const{
+    return activeVerCol;
 }
 
 //@resharding-support
-void Context::setShardingVer(const std::string& shardingVer){
-    sharding_version = shardingVer;
+void Context::setActiveVerColumn(const std::string& activeVerCol_){
+    activeVerCol = activeVerCol_;
 }
 
 void Context::setCurrentRoles(const std::vector<UUID> & current_roles_)

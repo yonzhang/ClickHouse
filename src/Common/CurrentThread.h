@@ -101,6 +101,8 @@ public:
         bool log_peak_memory_usage_in_destructor = true;
     };
 
+    /// @resharding-support set active version column to query context for later use in executeQuery
+    static void setActiveVerColumn(std::string activeVerCol);
 private:
     static void defaultThreadDeleter();
 };

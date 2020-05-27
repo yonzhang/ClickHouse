@@ -45,26 +45,13 @@ Context removeUserRestrictionsFromSettings(const Context & context, const Settin
 }
 
 //@resharding-support
-static std::optional<std::string> findActiveShardingMapVersionIfExists(const Context & context, const ASTPtr & query_ast){
-    const ASTSelectQuery & select = query_ast->as<ASTSelectQuery &>();
-    if (!select.tables())
+static std::optional<std::string> findActiveShardingMapVersionIfExists(const Context & context){
+    /// check if activeVerCol exists in query_context
+    if(context.hasQueryContext()){
+        std::string activeVerCol = context.getQueryContext().getActiveVerColumn();
+        return activeVerCol.empty() ? std::nullopt : std::optional<std::string>(activeVerCol);
+    }else
         return std::nullopt;
-
-    const auto & tables_in_select_query = select.tables()->as<ASTTablesInSelectQuery &>();
-    if (tables_in_select_query.children.empty())
-        return std::nullopt;
-
-    const auto & tables_element = tables_in_select_query.children[0]->as<ASTTablesInSelectQueryElement &>();
-    if (!tables_element.table_expression)
-        return std::nullopt;
-
-    const auto& table_expr = tables_element.table_expression->as<ASTTableExpression>();
-    if(!table_expr->database_and_table_name)
-        return std::nullopt;
-
-    const auto& db_table = table_expr->database_and_table_name->as<ASTIdentifier>();
-
-    return ReshardingUtils::findActiveShardingVersionIfExists(context, db_table->name );
 }
 
 Pipes executeQuery(
@@ -92,19 +79,18 @@ Pipes executeQuery(
         throttler = user_level_throttler;
 
     //@resharding-support: rewrite query with active version for snapshot query if needed
-    auto modified_query_ast = query_ast->clone();
-    auto foundVer = findActiveShardingMapVersionIfExists(context, query_ast);
+    auto foundVer = findActiveShardingMapVersionIfExists(context);
     if(foundVer){
         LOG_DEBUG(&Logger::get("ClusterProxy::executeQuery"), "found active sharding version: " << *foundVer);
-        VirtualColumnUtils::rewriteEntityInAst(modified_query_ast, "_sharding_ver", *foundVer);
+        VirtualColumnUtils::rewriteEntityInAst(query_ast, "_sharding_ver", *foundVer);
     }else{
         LOG_DEBUG(&Logger::get("ClusterProxy::executeQuery"), "not found active sharding version");
     }
 
-    const std::string query = queryToString(modified_query_ast);
+    const std::string query = queryToString(query_ast);
 
     for (const auto & shard_info : cluster->getShardsInfo())
-        stream_factory.createForShard(shard_info, query, modified_query_ast, new_context, throttler, query_info, res);
+        stream_factory.createForShard(shard_info, query, query_ast, new_context, throttler, query_info, res);
 
     return res;
 }

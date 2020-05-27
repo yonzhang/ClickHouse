@@ -266,6 +266,23 @@ void ThreadStatus::logToQueryThreadLog(QueryThreadLog & thread_log)
     thread_log.add(elem);
 }
 
+
+// @resharding-support
+void ThreadStatus::setActiveVerColumn(const std::string& activeVerCol){
+    if(query_context){
+        LOG_DEBUG(log, "set active version column to query_context: " << activeVerCol);
+        query_context->setActiveVerColumn(activeVerCol);
+    }
+}
+
+// @resharding-support
+void CurrentThread::setActiveVerColumn(std::string activeVerCol){
+    if (unlikely(!current_thread))
+        return;
+        
+    current_thread->setActiveVerColumn(activeVerCol);
+}
+
 void CurrentThread::initializeQuery()
 {
     if (unlikely(!current_thread))
@@ -349,5 +366,7 @@ CurrentThread::QueryScope::~QueryScope()
         tryLogCurrentException("CurrentThread", __PRETTY_FUNCTION__);
     }
 }
+
+
 
 }
