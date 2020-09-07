@@ -4,11 +4,15 @@
 #include <Interpreters/Context.h>
 #include <Interpreters/Cluster.h>
 #include <Interpreters/IInterpreter.h>
+#include <Interpreters/InterpreterSelectQuery.h>
+#include <Interpreters/ExternalDictionariesLoader.h>
 #include <Parsers/queryToString.h>
 #include <Interpreters/ProcessList.h>
 #include <Processors/Pipe.h>
 
-
+#include <Dictionaries/ComplexKeyHashedDictionary.h>
+#include <Storages/VirtualColumnUtils.h>
+#include <Resharding/ReshardingUtils.h>
 namespace DB
 {
 
