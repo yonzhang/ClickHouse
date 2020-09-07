@@ -59,7 +59,7 @@ add_subdirectory (Processors)
 add_subdirectory (Formats)
 add_subdirectory (Compression)
 add_subdirectory (Server)
-
+add_subdirectory (Resharding)
 
 set(dbms_headers)
 set(dbms_sources)
@@ -164,7 +164,7 @@ add_object_library(clickhouse_processors_sources Processors/Sources)
 add_object_library(clickhouse_processors_merges Processors/Merges)
 add_object_library(clickhouse_processors_merges_algorithms Processors/Merges/Algorithms)
 add_object_library(clickhouse_processors_queryplan Processors/QueryPlan)
-
+add_object_library(clickhouse_resharding Resharding)
 
 if (MAKE_STATIC_LIBRARIES OR NOT SPLIT_SHARED_LIBRARIES)
     add_library (dbms STATIC ${dbms_headers} ${dbms_sources})

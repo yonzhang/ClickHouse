@@ -299,6 +299,7 @@ SRCS(
     notLike.cpp
     now64.cpp
     now.cpp
+    NuColumnarConsistentHash.cpp
     nullIf.cpp
     pi.cpp
     plus.cpp

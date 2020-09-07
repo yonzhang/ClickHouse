@@ -718,6 +718,17 @@ std::optional<UUID> Context::getUserID() const
     return user_id;
 }
 
+/// @resharding-support
+std::string Context::getActiveVerColumn() const
+{
+    return activeVerCol;
+}
+
+/// @resharding-support
+void Context::setActiveVerColumn(const std::string& activeVerCol_)
+{
+    activeVerCol = activeVerCol_;
+}
 
 void Context::setCurrentRoles(const boost::container::flat_set<UUID> & current_roles_)
 {

@@ -213,6 +213,8 @@ private:
     /// Use copy constructor or createGlobal() instead
     Context();
 
+    /// @resharding-support
+    std::string activeVerCol;
 public:
     /// Create initial Context with ContextShared and etc.
     static Context createGlobal(ContextShared * shared);
@@ -269,6 +271,10 @@ public:
     boost::container::flat_set<UUID> getCurrentRoles() const;
     boost::container::flat_set<UUID> getEnabledRoles() const;
     std::shared_ptr<const EnabledRolesInfo> getRolesInfo() const;
+
+    /// @resharding-support
+    std::string getActiveVerColumn() const;
+    void setActiveVerColumn(const std::string& activeVerCol);
 
     /// Checks access rights.
     /// Empty database means the current database.

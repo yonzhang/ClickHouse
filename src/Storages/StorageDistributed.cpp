@@ -278,6 +278,7 @@ NamesAndTypesList StorageDistributed::getVirtuals() const
             NameAndTypePair("_partition_id", std::make_shared<DataTypeString>()),
             NameAndTypePair("_sample_factor", std::make_shared<DataTypeFloat64>()),
             NameAndTypePair("_shard_num", std::make_shared<DataTypeUInt32>()),
+            NameAndTypePair("_sharding_ver", std::make_shared<DataTypeUInt32>())
     };
 }
 

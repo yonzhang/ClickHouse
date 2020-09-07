@@ -110,6 +110,19 @@ private:
         const Settings & settings,
         const MergeTreeReaderSettings & reader_settings,
         Poco::Logger * log);
+
+    /**
+     * @resharding-support
+     * @return a pair of _sharding_ver and top-level table name from rewritten query
+     **/
+    std::optional<std::pair<std::string, std::string>> getRequiredShardingVerIfExists(const SelectQueryInfo & query_info) const;
+    /*
+     * @resharding-support
+     *
+     * @return true when this partition should be skipped, false otherwise
+     */
+    bool shouldSkipPartition(const Context & context, const std::string& requiredShardingVer, const std::string& table, const std::string& partition_id) const;
+       
 };
 
 }

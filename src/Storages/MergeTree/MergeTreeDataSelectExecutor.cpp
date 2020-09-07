@@ -20,6 +20,11 @@
 #include <Parsers/ASTSampleRatio.h>
 #include <Interpreters/ExpressionAnalyzer.h>
 #include <Interpreters/Context.h>
+/// @resharding-support
+#include <Interpreters/ExternalDictionariesLoader.h>
+#include <Dictionaries/ComplexKeyHashedDictionary.h>
+#include <Common/Macros.h>
+#include <Resharding/ReshardingUtils.h>
 
 /// Allow to use __uint128_t as a template parameter for boost::rational.
 // https://stackoverflow.com/questions/41198673/uint128-t-not-working-with-clang-and-libstdc
@@ -147,7 +152,117 @@ static RelativeSize convertAbsoluteSampleSizeToRelative(const ASTPtr & node, siz
     return std::min(RelativeSize(1), RelativeSize(absolute_sample_size) / RelativeSize(approx_total_rows));
 }
 
+// @resharding-support
+static std::optional<std::string> getTopTableNameFromQuery(const SelectQueryInfo & query_info){
+    ASTPtr query_ast = query_info.query;
+    const ASTSelectQuery & select = query_ast->as<ASTSelectQuery &>();
+    if (!select.tables())
+        return std::nullopt;
 
+    const auto & tables_in_select_query = select.tables()->as<ASTTablesInSelectQuery &>();
+    if (tables_in_select_query.children.empty())
+        return std::nullopt;
+
+    const auto & tables_element = tables_in_select_query.children[0]->as<ASTTablesInSelectQueryElement &>();
+    if (!tables_element.table_expression)
+        return std::nullopt;
+
+    const auto& table_expr = tables_element.table_expression->as<ASTTableExpression>();
+    if(!table_expr->database_and_table_name)
+        return std::nullopt;
+
+    const auto& db_table = table_expr->database_and_table_name->as<ASTIdentifier>();
+    return std::optional<std::string> {db_table->name};
+}
+
+/**
+ * @resharding-support
+ * Parse out required sharding version and table name
+ * The query in DT side:
+ *   SELECT t1.id, t1.name FROM default.t1
+ * The rewritten query received in data node side:
+ *   WITH 'A' AS _sharding_ver SELECT t1.id, t1.name FROM default.t1
+ *
+ **/
+std::optional<std::pair<std::string, std::string>> MergeTreeDataSelectExecutor::getRequiredShardingVerIfExists(const SelectQueryInfo & query_info) const{
+    ASTPtr ast = query_info.query;
+    ASTSelectQuery* select = dynamic_cast<ASTSelectQuery*>(ast.get());
+    if(!select){
+        LOG_DEBUG(log, "Skipping sharding version check for non-select query");
+         return std::nullopt;
+    }
+
+    ASTPtr with_clause = select->with();
+    ASTExpressionList* with_expression = dynamic_cast<ASTExpressionList*>(with_clause.get());
+    if(!with_expression){
+        LOG_DEBUG(log, "Skipping sharding version check without with_clause");
+         return std::nullopt;
+    }
+
+    ASTLiteral* ast_literal = dynamic_cast<ASTLiteral*>(with_expression->children[0].get());
+    if(!ast_literal){
+        LOG_DEBUG(log, "Skipping sharding version check as with expression is not ASTLiteral");
+         return std::nullopt;
+    }
+
+    if(ast_literal->alias != "_sharding_ver"){
+        LOG_DEBUG(log, "Skipping sharding version check as alias _sharding_ver is not found");
+         return std::nullopt;
+    }
+
+    Field& f = ast_literal->value;
+    DB::Field::Types::Which type = f.getType();
+    if(type != DB::Field::Types::Which::String){
+         LOG_DEBUG(log, "Skipping sharding version check as version value is not string type");
+         return std::nullopt;
+    }
+    std::string requiredVer = f.get<std::string>();
+    std::optional<std::string> topTableName = getTopTableNameFromQuery(query_info);
+    if(!topTableName){
+        LOG_DEBUG(log, "Skipping sharding version check as table name is not found");
+        return std::nullopt;
+    }
+    return std::optional<std::pair<std::string, std::string>> (std::make_pair(requiredVer, *topTableName));
+}
+
+/**
+ * @resharding-support
+ **/
+bool MergeTreeDataSelectExecutor::shouldSkipPartition(const Context & context, const std::string& activeVerColumn, const std::string& table, const std::string& partition_id) const{
+    // check current shard id from Macros
+    auto macros = context.getMacros();
+    Macros::MacroMap mm = macros->getMacroMap();
+    auto foundShard = mm.find("shard");
+    if(foundShard != mm.end()){
+        LOG_DEBUG(log, "shard id found from Macros: {}", foundShard->second);
+    }else{
+        LOG_DEBUG(log, "shard id not found in Macros");
+        return false;
+    }
+    UInt32 selfShard = std::stoi(foundShard->second);
+
+    // split partitionId to date and rangeid
+    std::size_t pos = partition_id.find_first_of('-');
+    if(pos == std::string::npos){
+        LOG_ERROR(log, "partition id does not contain '-'");
+        return false;
+    }
+
+    std::string date = partition_id.substr(0, pos);
+    std::string rangeId = partition_id.substr(pos+1);
+
+    std::optional<UInt32> shardId = ReshardingUtils::findShardIfExists(context.getExternalDictionariesLoader(), table, std::stoi(date), std::stoi(rangeId), activeVerColumn);
+
+    if(!shardId){
+        LOG_DEBUG(log, "shard not found for {table: {} date {}, range_id {}, activeVerColumn {} }", *shardId, table, date, rangeId, activeVerColumn);
+        return false;
+    }
+
+    LOG_DEBUG(log, "Found shard: {} for {table: {} date {}, range_id {}, activeVerColumn {} }", *shardId, table, date, rangeId, activeVerColumn);
+
+    return selfShard != *shardId;
+}
+    
 Pipes MergeTreeDataSelectExecutor::read(
     const Names & column_names_to_return,
     const StorageMetadataPtr & metadata_snapshot,
@@ -264,6 +379,12 @@ Pipes MergeTreeDataSelectExecutor::readFromParts(
         }
     }
 
+    /// @resharding-support: parse required sharding version and table name
+    std::optional<std::pair<std::string, std::string>> requiredPartitionVer = getRequiredShardingVerIfExists(query_info);
+    if(requiredPartitionVer){
+        LOG_DEBUG(log, "Required partiton version: {}, table: {}", (*requiredPartitionVer).first, (*requiredPartitionVer).second);
+    }
+
     /// Select the parts in which there can be data that satisfy `minmax_idx_condition` and that match the condition on `_part`,
     ///  as well as `max_block_number_to_read`.
     {
@@ -289,6 +410,15 @@ Pipes MergeTreeDataSelectExecutor::readFromParts(
                     continue;
             }
 
+            /// @resharding-support: skip partitions which are not required by current global version
+            if(requiredPartitionVer){
+                std::string partitionId = part->info.partition_id;
+                LOG_DEBUG(log, "Examining part: {} of partition : {}", part->name, partitionId);
+                if(shouldSkipPartition(context, (*requiredPartitionVer).first, (*requiredPartitionVer).second, partitionId)){
+                    LOG_DEBUG(log, "Skipping part: {} of partition : {}", part->name, partitionId);
+                    continue;
+                }
+            }
             parts.push_back(part);
         }
     }
