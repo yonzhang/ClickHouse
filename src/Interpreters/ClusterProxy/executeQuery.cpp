@@ -54,27 +54,27 @@ Context removeUserRestrictionsFromSettings(const Context & context, const Settin
  * tell if we really need perform a version check.
  * 
  **/ 
-static std::optional<std::string> findActiveVerColFromDictionaryIfExists(const Context & context, const ASTPtr & query_ast){
-    const ASTSelectQuery & select = query_ast->as<ASTSelectQuery &>();
-    if (!select.tables())
-        return std::nullopt;
+// static std::optional<std::string> findActiveVerColFromDictionaryIfExists(const Context & context, const ASTPtr & query_ast){
+//     const ASTSelectQuery & select = query_ast->as<ASTSelectQuery &>();
+//     if (!select.tables())
+//         return std::nullopt;
 
-    const auto & tables_in_select_query = select.tables()->as<ASTTablesInSelectQuery &>();
-    if (tables_in_select_query.children.empty())
-        return std::nullopt;
+//     const auto & tables_in_select_query = select.tables()->as<ASTTablesInSelectQuery &>();
+//     if (tables_in_select_query.children.empty())
+//         return std::nullopt;
 
-    const auto & tables_element = tables_in_select_query.children[0]->as<ASTTablesInSelectQueryElement &>();
-    if (!tables_element.table_expression)
-        return std::nullopt;
+//     const auto & tables_element = tables_in_select_query.children[0]->as<ASTTablesInSelectQueryElement &>();
+//     if (!tables_element.table_expression)
+//         return std::nullopt;
 
-    const auto& table_expr = tables_element.table_expression->as<ASTTableExpression>();
-    if(!table_expr->database_and_table_name)
-        return std::nullopt;
+//     const auto& table_expr = tables_element.table_expression->as<ASTTableExpression>();
+//     if(!table_expr->database_and_table_name)
+//         return std::nullopt;
 
-    const auto& db_table = table_expr->database_and_table_name->as<ASTIdentifier>();
+//     const auto& db_table = table_expr->database_and_table_name->as<ASTIdentifier>();
 
-    return ReshardingUtils::findActiveShardingVersionIfExists(context.getExternalDictionariesLoader(), db_table->name);
-}
+//     return ReshardingUtils::findActiveShardingVersionIfExists(context.getExternalDictionariesLoader(), db_table->name);
+// }
 
 /**
  * @resharding-support
@@ -83,21 +83,21 @@ static std::optional<std::string> findActiveVerColFromDictionaryIfExists(const C
  * 2) If activeVerCol does not exist in query context, it implies this is query going to all the shards, so here needs to 
  *    read activeVerCol from dictionary sharding_version_dict
  **/
-static std::optional<std::string> findActiveVerColumnIfExists(const Context & context, const ASTPtr & query_ast){
-    /// check if activeVerCol exists in query_context. 
-    /// NuColumnarConsistentHashing function may set activeVerCol in query context before this
-    std::string activeVerCol;
-    if(context.hasQueryContext()){
-        activeVerCol = context.getQueryContext().getActiveVerColumn();
-    }
+// static std::optional<std::string> findActiveVerColumnIfExists(const Context & context, const ASTPtr & query_ast){
+//     /// check if activeVerCol exists in query_context. 
+//     /// NuColumnarConsistentHashing function may set activeVerCol in query context before this
+//     std::string activeVerCol;
+//     if(context.hasQueryContext()){
+//         activeVerCol = context.getQueryContext().getActiveVerColumn();
+//     }
     
-    if(!activeVerCol.empty()){
-        return std::optional<std::string>(activeVerCol);
-    }else{
-        // try to fetch active version column from dictionary based on current table
-        return findActiveVerColFromDictionaryIfExists(context, query_ast);
-    }
-}
+//     if(!activeVerCol.empty()){
+//         return std::optional<std::string>(activeVerCol);
+//     }else{
+//         // try to fetch active version column from dictionary based on current table
+//         return findActiveVerColFromDictionaryIfExists(context, query_ast);
+//     }
+// }
 
 Pipes executeQuery(
     IStreamFactory & stream_factory, const ClusterPtr & cluster,
@@ -124,13 +124,13 @@ Pipes executeQuery(
         throttler = user_level_throttler;
 
     //@resharding-support: rewrite query with active version for snapshot query if needed
-    auto foundVer = findActiveVerColumnIfExists(context, query_ast);
-    if(foundVer){
-        LOG_DEBUG(&Logger::get("ClusterProxy::executeQuery"), "found active sharding version: " << *foundVer);
-        VirtualColumnUtils::rewriteEntityInAst(query_ast, "_sharding_ver", *foundVer);
-    }else{
-        LOG_DEBUG(&Logger::get("ClusterProxy::executeQuery"), "not found active sharding version");
-    }
+    // auto foundVer = findActiveVerColumnIfExists(context, query_ast);
+    // if(foundVer){
+    //     LOG_DEBUG(&Logger::get("ClusterProxy::executeQuery"), "found active sharding version: " << *foundVer);
+    //     VirtualColumnUtils::rewriteEntityInAst(query_ast, "_sharding_ver", *foundVer);
+    // }else{
+    //     LOG_DEBUG(&Logger::get("ClusterProxy::executeQuery"), "not found active sharding version");
+    // }
 
     const std::string query = queryToString(query_ast);
 

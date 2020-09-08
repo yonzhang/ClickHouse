@@ -31,6 +31,8 @@ void registerFunctionTrim(FunctionFactory &);
 void registerFunctionRegexpQuoteMeta(FunctionFactory &);
 // support custom consistent hash
 void registerFunctionNuColumnarConsistentHash(FunctionFactory &);
+// support monstor consistent hash
+void registerFunctionMonstorConsistentHash(FunctionFactory &);
 
 #if USE_BASE64
 void registerFunctionBase64Encode(FunctionFactory &);
@@ -63,6 +65,7 @@ void registerFunctionsString(FunctionFactory & factory)
     registerFunctionTrim(factory);
     registerFunctionRegexpQuoteMeta(factory);
     registerFunctionNuColumnarConsistentHash(factory);
+    registerFunctionMonstorConsistentHash(factory);
 #if USE_BASE64
     registerFunctionBase64Encode(factory);
     registerFunctionBase64Decode(factory);

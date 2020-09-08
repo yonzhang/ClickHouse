@@ -281,6 +281,7 @@ SRCS(
     now.cpp
     now64.cpp
     NuColumnarConsistentHash.cpp
+    MonstorConsistentHash.cpp
     nullIf.cpp
     pi.cpp
     plus.cpp
