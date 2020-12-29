@@ -120,7 +120,7 @@
     "editor.autoIndent": true,
     "editor.formatOnPaste": false,
     "editor.formatOnType": false,
-    "editor.formatOnSave": true,
+    "editor.formatOnSave": false,
     "[javascript]": {
         "editor.formatOnSave": false
     },
@@ -132,7 +132,7 @@
     },
     "eslint.enable": true,
     "cmake.cmakePath": "/usr/local/bin/cmake",
-// "cmake.compile_commands.json": "${workspaceRoot}/cmake-build-debug/compile_commands.json",
+    // "cmake.compile_commands.json": "${workspaceRoot}/cmake-build-debug/compile_commands.json",
     "cmake.configureEnvironment": {},
     "cmake.configureArgs": [
         "-DCMAKE_BUILD_TYPE=Debug",
@@ -232,4 +232,3 @@
         "pdata"
     ],
 }
-

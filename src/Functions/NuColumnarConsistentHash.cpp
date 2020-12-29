@@ -40,7 +40,7 @@ namespace ErrorCodes
  *  - moving less keys
  *  - copy Clickhouse partition without affecting live traffic
  * 
- * Sharding expression is NuColumnarConsistentHash('<table_name>', toYYYYMMDD(<date_field>), NuColumnarHashRange(<other_fields>))
+ * Sharding expression is NuColumnarConsistentHash('$table_name', toYYYYMMDD($date_field), NuColumnarHashRange($other_fields))
  * 
  * Sharding metadata is stored in dictionary called sharding_version_dict, which has below schema
  * 
@@ -60,8 +60,8 @@ namespace ErrorCodes
     PRIMARY KEY table, date, range_id
  * 
  * Algorithm to choose shard
- * 1) read current active version column from the fixed entry {<table_name>, '00000000', 0}
- * 2) read shard id from active column from the entry {<table_name>, toYYYYMMDD(<date_field>), NuColumnarHashRange(<other_fields>)}
+ * 1) read current active version column from the fixed entry {$table_name, '00000000', 0}
+ * 2) read shard id from active column from the entry {$table_name, toYYYYMMDD($date_field), NuColumnarHashRange($other_fields)}
  **/        
 class NuColumnarConsistentHash : public IFunction
 {
@@ -254,7 +254,7 @@ public:
                 {
                     const UInt8& v_uint8 = checkAndGetColumn<ColumnUInt8>(c)->getElement(0);
                     boost::hash_combine(seed, static_cast<unsigned char>(v_uint8));
-                    LOG_DEBUG(log, "Column {:d}: name={}, type={:s}, value={:u}, hash={}", i, c->getName(), getTypeName(which.idx), (uint32_t)v_uint8,   seed);
+                    LOG_DEBUG(log, "Column {:d}: name={}, type={:s}, value={:u}, hash={}", i, c->getName(), getTypeName(which.idx), static_cast<uint32_t>(v_uint8),   seed);
                     break;
                 }
                 case TypeIndex::Int8:
