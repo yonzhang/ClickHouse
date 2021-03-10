@@ -8,6 +8,7 @@
 
 #include <DataTypes/DataTypeFactory.h>
 #include <DataTypes/DataTypesNumber.h>
+#include <DataTypes/DataTypeArray.h>
 
 #include <Storages/Distributed/DistributedBlockOutputStream.h>
 #include <Storages/StorageFactory.h>
@@ -770,6 +771,31 @@ IColumn::Selector StorageDistributed::createSelector(const ClusterPtr cluster, c
 
 #undef CREATE_FOR_TYPE
 
+    // handle special case for array of integer
+    if (typeid_cast<const DataTypeArray *>(result.type.get())){
+        Poco::Logger * log = &Poco::Logger::get("ReshardingSupport");
+        if(!isColumnConst(*result.column)){
+            LOG_ERROR(log, "Shard selector of array must be const, but name={}, family={}, type={}", result.column->getName(), 
+                result.column->getFamilyName(), result.column->getDataType());
+        }else{
+            const DB::ColumnConst& c = typeid_cast<const ColumnConst &>(*result.column);
+            LOG_DEBUG(log, "Shard selector of array has name={}, family={}, type={}", c.getName(), c.getFamilyName(), c.getDataType());
+            DB::Array arr = c.getValue<DB::Array>();
+            if(arr.empty()){
+                LOG_ERROR(log, "Shard selector of array must not be empty");    
+            }else{
+                auto nested = ColumnUInt32::create();
+                for(size_t i=0; i<arr.size(); i++){
+                    DB::Field f = arr[i];
+                    UInt64 n = f.get<UInt64>();
+                    LOG_DEBUG(log, "field {}: type={}, value={}", i, f.getTypeName(), n);
+                    nested->getData().push_back(n);
+                }
+                return createBlockSelector<UInt32>(*nested, slot_to_shard);  
+            }
+        }
+    }
+
     throw Exception{"Sharding key expression does not evaluate to an integer type", ErrorCodes::TYPE_MISMATCH};
 }
 
@@ -917,9 +943,10 @@ void registerStorageDistributed(StorageFactory & factory)
 
             auto type = block.getByPosition(0).type;
 
-            if (!type->isValueRepresentedByInteger())
-                throw Exception("Sharding expression has type " + type->getName() +
-                    ", but should be one of integer type", ErrorCodes::TYPE_MISMATCH);
+            // fixme just to relax this check as we are going to support array of integers
+            // if (!type->isValueRepresentedByInteger())
+            //     throw Exception("Sharding expression has type " + type->getName() +
+            //         ", but should be one of integer type", ErrorCodes::TYPE_MISMATCH);
         }
 
         return StorageDistributed::create(

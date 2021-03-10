@@ -266,14 +266,18 @@ bool ExecutableFunctionAdaptor::defaultImplementationForConstantArguments(
     executeWithoutLowCardinalityColumns(temporary_block, temporary_argument_numbers, arguments_size, temporary_block.rows(), dry_run);
 
     ColumnPtr result_column;
-    /// extremely rare case, when we have function with completely const arguments
-    /// but some of them produced by non isDeterministic function
+    // extremely rare case, when we have function with completely const arguments
+    // but some of them produced by non isDeterministic function
     if (temporary_block.getByPosition(arguments_size).column->size() > 1)
         result_column = temporary_block.getByPosition(arguments_size).column->cloneResized(1);
     else
         result_column = temporary_block.getByPosition(arguments_size).column;
 
     block.getByPosition(result).column = ColumnConst::create(result_column, input_rows_count);
+    // printf("%ld", input_rows_count);
+    // size_t rows = temporary_block.getByPosition(arguments_size).column->size();
+    // result_column = temporary_block.getByPosition(arguments_size).column->cloneResized(rows);
+    // block.getByPosition(result).column = result_column;
     return true;
 }
 

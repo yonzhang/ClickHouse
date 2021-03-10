@@ -11,7 +11,7 @@ namespace DB
 
 const std::string ReshardingUtils::_SHARDING_VERSION_DICTIONARY = "default.sharding_version_dict";
 
-std::optional<std::string> ReshardingUtils::findActiveShardingVersionIfExists(const ExternalDictionariesLoader & dictionaries_loader, const std::string& db_table_name){
+std::optional<std::string> ReshardingUtils::findActiveShardingVersionIfExists(const ExternalDictionariesLoader & dictionaries_loader, const std::string& db_table_name, const std::string& dateTag){
     std::shared_ptr<const IDictionaryBase> partition_ver_dict;
     try{
         partition_ver_dict = dictionaries_loader.getDictionary(_SHARDING_VERSION_DICTIONARY);
@@ -37,7 +37,8 @@ std::optional<std::string> ReshardingUtils::findActiveShardingVersionIfExists(co
 
     // column 'date'
     auto key_date = ColumnString::create();
-    key_date->insert("00000000");
+    // key_date->insert("00000000");
+    key_date->insert(dateTag);
     ColumnString::Ptr immutable_ptr_key_date = std::move(key_date);
     key_columns.push_back(immutable_ptr_key_date);
     key_types.push_back(std::make_shared<DataTypeString>());
@@ -116,6 +117,61 @@ std::optional<UInt32> ReshardingUtils::findShardIfExists(const ExternalDictionar
 
     // shardId is number starting from 1 and 0 is used for non-existence of the specified entry.
     return shardId == 0 ? std::nullopt : std::optional<UInt32> {shardId};
+}
+
+std::optional<std::string> ReshardingUtils::findShardListIfExists(const ExternalDictionariesLoader & dictionaries_loader, const std::string& table, const std::string& dateTag, UInt32 bucket, const std::string& activeVerColumn){
+    auto getDebugContext = [&](){
+        std::ostringstream oss;
+        oss << "from column: " << activeVerColumn <<  ", for {table: " << table << ", date: " << dateTag << ", bucket: " << bucket << "}";
+        return oss.str();
+    };
+
+    std::shared_ptr<const IDictionaryBase> partition_ver_dict;
+    try{
+        partition_ver_dict = dictionaries_loader.getDictionary(_SHARDING_VERSION_DICTIONARY);
+    }catch(const DB::Exception& ex){
+        LOG_DEBUG(&Poco::Logger::get("ReshardingUtils"), ex.what(), ", ", getDebugContext());
+        return std::nullopt;
+    }
+
+    const IDictionaryBase * dict_ptr = partition_ver_dict.get();
+    const auto dict = typeid_cast<const ComplexKeyHashedDictionary *>(dict_ptr);
+    if (!dict){
+        LOG_DEBUG(&Poco::Logger::get("ReshardingUtils"), "ComplexKeyHashedDictionary not found: {}", getDebugContext());
+        return std::nullopt;
+    }
+
+    Columns key_columns;
+    DataTypes key_types;
+
+    // column 'table'
+    auto key_tablename = ColumnString::create();
+    key_tablename->insert(table);
+    ColumnString::Ptr immutable_ptr_key_tablename = std::move(key_tablename);
+    key_columns.push_back(immutable_ptr_key_tablename);
+    key_types.push_back(std::make_shared<DataTypeString>());
+
+    // column 'date'
+    auto key_date = ColumnString::create();
+    key_date->insert(dateTag);
+    ColumnString::Ptr immutable_ptr_key_date = std::move(key_date);
+    key_columns.push_back(immutable_ptr_key_date);
+    key_types.push_back(std::make_shared<DataTypeString>());
+
+    // column 'bucket'
+    auto key_rangeid = ColumnUInt32::create();
+    key_rangeid->insert(bucket);
+    ColumnUInt32::Ptr immutable_ptr_key_rangeid = std::move(key_rangeid);
+    key_columns.push_back(immutable_ptr_key_rangeid);
+    key_types.push_back(std::make_shared<DataTypeUInt32>());
+
+    // column 'S' - 'T' to get shard id
+    auto out = ColumnString::create();
+    dict->getString(activeVerColumn, key_columns, key_types, out.get());
+    std::string shardList = out->getDataAt(0).toString();
+
+    // shardList is a string with multiple shard ids separated by comma
+    return shardList.empty() ? std::nullopt : std::optional<std::string> {shardList};
 }
 
 }

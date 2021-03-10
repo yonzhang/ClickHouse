@@ -254,11 +254,11 @@ bool MergeTreeDataSelectExecutor::shouldSkipPartition(const Context & context, c
     std::optional<UInt32> shardId = ReshardingUtils::findShardIfExists(context.getExternalDictionariesLoader(), table, std::stoi(date), std::stoi(rangeId), activeVerColumn);
 
     if(!shardId){
-        LOG_DEBUG(log, "shard not found for {table: {} date {}, range_id {}, activeVerColumn {} }", *shardId, table, date, rangeId, activeVerColumn);
+        LOG_DEBUG(log, "shard not found for table {}, date {}, range_id {}, activeVerColumn {}", table, date, rangeId, activeVerColumn);
         return false;
     }
 
-    LOG_DEBUG(log, "Found shard: {} for {table: {} date {}, range_id {}, activeVerColumn {} }", *shardId, table, date, rangeId, activeVerColumn);
+    LOG_DEBUG(log, "Found shard: {} for table {}, date {}, range_id {}, activeVerColumn {}", *shardId, table, date, rangeId, activeVerColumn);
 
     return selfShard != *shardId;
 }

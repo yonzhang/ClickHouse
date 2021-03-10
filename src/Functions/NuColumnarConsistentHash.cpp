@@ -12,6 +12,7 @@
 #include <common/logger_useful.h>
 #include <DataTypes/DataTypeDate.h>
 #include <DataTypes/DataTypesNumber.h>
+#include <DataTypes/DataTypeArray.h>
 #include "boost/functional/hash.hpp"
 #include <Columns/ColumnsNumber.h>
 #include <Core/Types.h>
@@ -34,46 +35,40 @@ namespace ErrorCodes
 /**
  * @resharding-support
  * 
- * One consistent hashing algorithm to choose shards based on date field and other fields
- * 
- * This consistent hashing algorithm has 2 benefits in case of resharding
- *  - moving less keys
- *  - copy Clickhouse partition without affecting live traffic
- * 
- * Sharding expression is NuColumnarConsistentHash('$table_name', toYYYYMMDD($date_field), NuColumnarHashRange($other_fields))
- * 
- * Sharding metadata is stored in dictionary called sharding_version_dict, which has below schema
- * 
- *  CREATE DICTIONARY sharding_version_dict
+ * find shard from dictionary by complete keys
+ *  
+   CREATE DICTIONARY sharding_version_dict
     (
         table String,
         date String,
-        range_id UInt32,
+        bucket UInt32,
         active_ver String,
         A UInt32,
         B UInt32,
-        C UInt32,
-        D UInt32,
-        E UInt32,
-        F UInt32
+        S String,
+        T String
     )
-    PRIMARY KEY table, date, range_id
+    PRIMARY KEY table, date, bucket
+    SOURCE(FILE(path './user_files/sharding_version_dict.csv' format 'CSV'))
+    LAYOUT(COMPLEX_KEY_HASHED())
+    LIFETIME(10)
+    ;
  * 
- * Algorithm to choose shard
- * 1) read current active version column from the fixed entry {$table_name, '00000000', 0}
- * 2) read shard id from active column from the entry {$table_name, toYYYYMMDD($date_field), NuColumnarHashRange($other_fields)}
+ * Algorithm to find shard
+ * 1) read current active version column from the entry {$table_name, '00000000', 0}
+ * 2) read shard id from active column from the entry {$table_name, toYYYYMMDD($date_field), $bucket}
  **/        
-class NuColumnarConsistentHash : public IFunction
+class GetShardFromDict : public IFunction
 {
 public:
-    static constexpr auto name = "NuColumnarConsistentHash";
+    static constexpr auto name = "getShardFromDict";
 
     static FunctionPtr create(const Context & context)
     {
-        return std::make_shared<NuColumnarConsistentHash>(context.getExternalDictionariesLoader());
+        return std::make_shared<GetShardFromDict>(context.getExternalDictionariesLoader());
     }
 
-    explicit NuColumnarConsistentHash(const ExternalDictionariesLoader & dictionaries_loader_) : dictionaries_loader(dictionaries_loader_) {}
+    explicit GetShardFromDict(const ExternalDictionariesLoader & dictionaries_loader_) : dictionaries_loader(dictionaries_loader_) {}
 
     String getName() const override { return name; }
 
@@ -100,7 +95,7 @@ public:
      * The expected arguments must be (table_name, f_date, hash_range_id)
      * hash_range_id is from 1 to 16
      **/
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result, size_t ) const override
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result, size_t input_rows_count ) const override
     {
         LOG_DEBUG(log, "checking all arguments for NuColumnConsistentHash");
         // argument 'table'
@@ -123,8 +118,8 @@ public:
         const IDataType * date_arg_type = block.getByPosition(date_arg).type.get();        
         // assert type for argument 'date' is Date
         if (date_arg_type->getTypeId() != TypeIndex::UInt32){
-            LOG_WARNING(log, "NuColumnarConsistentHash function's second argument must be 'date' with 'UInt32' type");
-            throw Exception("NuColumnarConsistentHash function's second argument 'date' is not 'UInt32' type", ErrorCodes::ILLEGAL_COLUMN);
+            LOG_WARNING(log, "GetShardFromDict function's second argument must be 'date' with 'UInt32' type");
+            throw Exception("GetShardFromDict function's second argument 'date' is not 'UInt32' type", ErrorCodes::ILLEGAL_COLUMN);
         }
         const IColumn * date_col = block.getByPosition(date_arg).column.get();
         const auto * date_col_val = checkAndGetColumn<ColumnUInt32>(date_col); 
@@ -135,23 +130,32 @@ public:
         const IDataType * rangeid_arg_type = block.getByPosition(rangeid_arg).type.get();        
         // assert type for argument 'range_id' is UInt32
         if (rangeid_arg_type->getTypeId() != TypeIndex::UInt32){
-            LOG_WARNING(log, "NuColumnarConsistentHash function's third argument must be 'range_id' with 'UInt32' type");
-            throw Exception("NuColumnarConsistentHash function's sethirdcond argument 'range_id' is not 'UInt32' type", ErrorCodes::ILLEGAL_COLUMN);
+            LOG_WARNING(log, "GetShardFromDict function's third argument must be 'range_id' with 'UInt32' type");
+            throw Exception("GetShardFromDict function's sethirdcond argument 'range_id' is not 'UInt32' type", ErrorCodes::ILLEGAL_COLUMN);
         }
         const IColumn * rangeid_col = block.getByPosition(rangeid_arg).column.get();
         const auto * rangeid_col_val = checkAndGetColumn<ColumnUInt32>(rangeid_col); 
         LOG_DEBUG(log, "column 2: name={}, type=UInt32, value={}", rangeid_col->getName(), rangeid_col_val->getElement(0));
 
-        UInt32 shard = lookupShard(table, date_col_val->getElement(0), rangeid_col_val->getElement(0));
-        
-        auto c_res = ColumnUInt32::create();
-        auto & data = c_res->getData();
-        data.push_back(shard);
-        block.getByPosition(result).column = std::move(c_res);
+        // pushing an array for testing only
+        if(input_rows_count > 0){
+            UInt32 shard = lookupShard(table, date_col_val->getElement(0), rangeid_col_val->getElement(0));
+            LOG_DEBUG(log, "found shard: shard={}, table={}, date={} rangeid={}", shard, table, date_col_val->getElement(0), rangeid_col_val->getElement(0));
+            auto c_res = ColumnUInt32::create();
+            auto & data = c_res->getData();
+            //shard number starts from 1, but shard index in cluster definition starts from 0, so shard-1 is the index
+            data.push_back(shard-1);
+            block.getByPosition(result).column = std::move(c_res);
+            LOG_DEBUG(log, "GetShardFromDict run with input_rows_count={}, result={}", input_rows_count, result);
+        }else{
+            auto c_res = ColumnUInt32::create();
+            block.getByPosition(result).column = std::move(c_res);
+            LOG_DEBUG(log, "GetShardFromDict dry-run with input_rows_count=0, result={}", result);
+        }
     }
 private:
     UInt32 lookupShard(const std::string& table, UInt32 date, UInt32 rangeId) const {
-        std::optional<std::string> activeVerColumn = ReshardingUtils::findActiveShardingVersionIfExists(dictionaries_loader, table);
+        std::optional<std::string> activeVerColumn = ReshardingUtils::findActiveShardingVersionIfExists(dictionaries_loader, table, "00000000");
 
         if(!activeVerColumn){
             std::ostringstream err;
@@ -164,7 +168,7 @@ private:
 
          if(!shard){
             std::ostringstream err;
-            err << "shard not found for NuColumnarConsistentHash for {table: " << table << ", date: " << date <<
+            err << "shard not found for NuColumnarConsistentHash for table: " << table << ", date: " << date <<
                 ", range_id: " << rangeId << ", activeVerColumn: " << *activeVerColumn;
             throw Exception(err.str(), ErrorCodes::ILLEGAL_COLUMN);
         }
@@ -172,36 +176,31 @@ private:
         // put activeVerColumn to query context for later use in executeQuery
         CurrentThread::setActiveVerColumn(*activeVerColumn);
 
-        // shard index starting from 0, used for mod by number of shards
-        return (*shard - 1);
+        return (*shard);
     }
 
     const ExternalDictionariesLoader & dictionaries_loader;
-    Poco::Logger * log = &Poco::Logger::get("NuColumnarConsistentHash");
+    Poco::Logger * log = &Poco::Logger::get("GetShardFromDict");
 };
 
 
 
+
 /**
- *  hashCombine input arguments and return an integer to indicate
- *  This function is used as below
- *   NuColumnarHashRange(f1, f2, ...)
- * it uses boost hashCombine to compute a hash value with std::size_t type,
- *   then lookup bucket id by the hash value. The lookup is on a fixed number of
- *   array whose element is sorted hash range.
- * Assume max value for std::size_t is N (2^64-1), obviously 0 is min value, and we need 16 buckets,
- * so each bucket has (N+1)/16 numbers, so the first bucket is [0, (N+1)/16-1], i.e. [0, (N-15)/16] 
- *  Example: [(N-15)/16, (N-15)/16*2+1, (N-15)/16*3+2, ... , (N-15)/16*15+14, N]
+ *  GetShardsFromDictByBucket("default.ads", modulo(sellerId,10))
+ **
  **/ 
-class NuColumnarHashRange : public IFunction
+class GetShardsFromDictByBucket : public IFunction
 {
 public:
-    static constexpr auto name = "NuColumnarHashRange";
+    static constexpr auto name = "getShardsFromDictByBucket";
 
-    static FunctionPtr create(const Context &)
+    static FunctionPtr create(const Context & context)
     {
-        return std::make_shared<NuColumnarHashRange>();
+         return std::make_shared<GetShardsFromDictByBucket>(context.getExternalDictionariesLoader());
     }
+
+    explicit GetShardsFromDictByBucket(const ExternalDictionariesLoader & dictionaries_loader_) : dictionaries_loader(dictionaries_loader_) {}
 
     String getName() const override { return name; }
 
@@ -215,112 +214,103 @@ public:
 
     DataTypePtr getReturnTypeImpl(const DataTypes & ) const override 
     {
-        return std::make_shared<DataTypeNumber<UInt32>>();
+        return std::make_shared<DataTypeArray>(std::make_shared<DataTypeNumber<UInt32>>());
     }
 
      /**
-     * The expected arguments must be (f_date, f1, f2, ...)
+     * test to return multiple values
      * 
-     * return bucket from 1 to 16
      **/
-    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result, size_t ) const override
+    void executeImpl(Block & block, const ColumnNumbers & arguments, size_t result, size_t input_rows_count) const override
     {
-        std::size_t combinedHash = concatenatedHash(block, arguments);
-        // print hash ranges
-        for(auto it = hash_ranges.begin(); it != hash_ranges.end(); ++it){
-            LOG_DEBUG(log, "hash range: {}", *it);
-        }
-        auto found = std::lower_bound(hash_ranges.begin(), hash_ranges.end(), combinedHash);
-        std::size_t bucketIdx = found-hash_ranges.begin()+1;
-        LOG_DEBUG(log, "Combined hash= {}, bucket index={}", combinedHash, bucketIdx);
+        LOG_DEBUG(log, "checking all arguments for GetShardsByBucket");
 
-        auto c_res = ColumnUInt32::create();
-        auto & data = c_res->getData();
-        data.push_back(static_cast<UInt32>(bucketIdx));
+        if(input_rows_count == 0){
+            auto nested = ColumnUInt32::create();
+            auto c_res = ColumnArray::create(std::move(nested));
+            block.getByPosition(result).column = std::move(c_res);
+            LOG_DEBUG(log, "dry-run with input_rows_count=0, result={}", result);
+            return;
+        }
+
+        // argument 'table'
+        const auto& table_arg = arguments[0];
+        const IDataType * table_arg_type = block.getByPosition(table_arg).type.get();
+        // assert type for argument 'table' is String
+        if(table_arg_type->getTypeId() != TypeIndex::String){
+            LOG_ERROR(log, "GetShardsByBucket function's first argument must be 'table' with 'String' type");
+            throw Exception("GetShardsByBucket function's first argument 'table' is not 'String' type", ErrorCodes::ILLEGAL_COLUMN);
+        }
+        const IColumn * table_col = block.getByPosition(table_arg).column.get();
+        const ColumnString * table_col_string = checkAndGetColumn<ColumnString>(table_col);
+        const ColumnConst * table_col_const_string = checkAndGetColumnConst<ColumnString>(table_col);
+        std::string table = table_col_string ? table_col_string->getDataAt(0).toString() : table_col_const_string->getDataAt(0).toString();
+        LOG_DEBUG(log, "column 0: name={}, type=String, value={}", table_col->getName(), table);
+
+         // argument 'bucket'
+        const auto& bucket_arg = arguments[1];
+        const IDataType * bucket_arg_type = block.getByPosition(bucket_arg).type.get();        
+        // assert type for argument 'bucket' is UInt32
+        if (bucket_arg_type->getTypeId() != TypeIndex::UInt32){
+            LOG_WARNING(log, "GetShardsByBucket function's second argument must be 'bucket' with 'UInt32' type");
+            throw Exception("GetShardsByBucket function's second argument 'bucket' is not 'UInt32' type", ErrorCodes::ILLEGAL_COLUMN);
+        }
+        const IColumn * bucket_col = block.getByPosition(bucket_arg).column.get();
+        const auto * bucket_col_val = checkAndGetColumn<ColumnUInt32>(bucket_col); 
+        UInt32 bucket = bucket_col_val->getElement(0);
+        LOG_DEBUG(log, "column 1: name={}, type=UInt32, value={}", bucket_col->getName(), bucket);
+
+        std::optional<std::string> activeVerColumn = ReshardingUtils::findActiveShardingVersionIfExists(dictionaries_loader, table, "99999999");
+
+        if(!activeVerColumn){
+            std::ostringstream err;
+            err << "active version column not found for GetShardsByBucket for {table: " << table << ", date: 99999999" << 
+                ", bucket: " << bucket_col_val->getElement(0);
+            throw Exception(err.str(), ErrorCodes::ILLEGAL_COLUMN);
+        }
+
+        std::optional<std::string> shardList = ReshardingUtils::findShardListIfExists(dictionaries_loader, table, "99999999", bucket, *activeVerColumn);
+
+         if(!shardList){
+            std::ostringstream err;
+            err << "shard not found for GetShardsFromDictByBucket for table: " << table << ", date: 99999999" << 
+                ", bucket: " << bucket << ", activeVerColumn: " << *activeVerColumn;
+            throw Exception(err.str(), ErrorCodes::ILLEGAL_COLUMN);
+        }
+
+        // split shard list by seperator comma
+        std::string::size_type prev_pos = 0, pos = 0;
+        char seperator = ',';
+
+        auto nested = ColumnUInt32::create();
+        int count = 0;
+        while((pos = (*shardList).find(seperator, pos)) != std::string::npos)
+        {
+            std::string shard((*shardList).substr(prev_pos, pos-prev_pos));
+            int shardId = std::stoi(shard); 
+            nested->getData().push_back(shardId-1);
+            prev_pos = ++pos;
+            count++;
+        }
+        std::string lastShard((*shardList).substr(prev_pos, pos-prev_pos));
+        nested->getData().push_back(std::stoi(lastShard)-1);
+        count++;
+        LOG_DEBUG(log, "shard count={}, shard list={}", count, *shardList);
+        auto off = ColumnUInt64::create();
+        auto & off_data = off->getData();
+        off_data.push_back(count);
+        auto c_res = ColumnArray::create(std::move(nested), std::move(off));
         block.getByPosition(result).column = std::move(c_res);
     }
 
-    // TODO support all possible data types
-    std::size_t concatenatedHash(Block & block, const ColumnNumbers & arguments) const {
-        std::size_t seed = 0;
-        for(std::vector<size_t>::size_type i=0; i<arguments.size(); i++){
-            const IColumn * c = block.getByPosition(arguments[i]).column.get();
-            // check type for column to do hashing
-            const IDataType * type = block.getByPosition(arguments[i]).type.get();
-            WhichDataType which(type);
-            switch (which.idx)
-            {
-                case TypeIndex::UInt8:
-                {
-                    const UInt8& v_uint8 = checkAndGetColumn<ColumnUInt8>(c)->getElement(0);
-                    boost::hash_combine(seed, static_cast<unsigned char>(v_uint8));
-                    LOG_DEBUG(log, "Column {:d}: name={}, type={:s}, value={:u}, hash={}", i, c->getName(), getTypeName(which.idx), static_cast<uint32_t>(v_uint8),   seed);
-                    break;
-                }
-                case TypeIndex::Int8:
-                {
-                    const Int8& v_int8 = checkAndGetColumn<ColumnInt8>(c)->getElement(0);
-                    boost::hash_combine(seed, v_int8);
-                    LOG_DEBUG(log, "Column {:d}: name={}, type={:s}, value={:d}, hash={}", i, c->getName(), getTypeName(which.idx), v_int8,   seed);
-                    break;
-                }
-                case TypeIndex::Int64:
-                {
-                    const Int64& v_int64 = checkAndGetColumn<ColumnInt64>(c)->getElement(0);
-                    boost::hash_combine(seed, v_int64);
-                    LOG_DEBUG(log, "Column {:d}: name={}, type={:s}, value={:d}, hash={}", i, c->getName(), getTypeName(which.idx), v_int64, seed);
-                    break;
-                }
-                case TypeIndex::String:
-                {
-                    const ColumnString* val = checkAndGetColumn<ColumnString>(c);
-                    std::string v_str = val->getDataAt(0).toString();
-                    LOG_DEBUG(log, "Column {:d}: name={}, type={:s}, value={:s}, hash={}", i, c->getName(), getTypeName(which.idx), v_str, seed);
-                    boost::hash_combine(seed, v_str);
-                    break;
-                }
-                default:
-                {
-                    LOG_DEBUG(log, "Skipping column {:d}: name={}, type={:s}", i, c->getName(), getTypeName(which.idx));
-                    break;
-                }
-            }
-        }
-        return seed;
-    }
-
 private:
-    Poco::Logger * log = &Poco::Logger::get("NuColumnarHashRange");
-    static std::size_t unit_range;
-    // 16 buckets for search
-    static std::vector<std::size_t> hash_ranges;
-};
-
-std::size_t NuColumnarHashRange::unit_range = (static_cast<std::size_t>(-1)-15)/16;
-
-std::vector<std::size_t> NuColumnarHashRange::hash_ranges = 
-{
-    NuColumnarHashRange::unit_range, 
-    NuColumnarHashRange::unit_range*2+1, 
-    NuColumnarHashRange::unit_range*3+2, 
-    NuColumnarHashRange::unit_range*4+3, 
-    NuColumnarHashRange::unit_range*5+4, 
-    NuColumnarHashRange::unit_range*6+5,
-    NuColumnarHashRange::unit_range*7+6,
-    NuColumnarHashRange::unit_range*8+7, 
-    NuColumnarHashRange::unit_range*9+8, 
-    NuColumnarHashRange::unit_range*10+9, 
-    NuColumnarHashRange::unit_range*11+10, 
-    NuColumnarHashRange::unit_range*12+11, 
-    NuColumnarHashRange::unit_range*13+12, 
-    NuColumnarHashRange::unit_range*14+13, 
-    NuColumnarHashRange::unit_range*15+14, 
-    static_cast<std::size_t>(-1)
+    const ExternalDictionariesLoader & dictionaries_loader;
+    Poco::Logger * log = &Poco::Logger::get("GetShardsFromDictByBucket");
 };
 
 void registerFunctionNuColumnarConsistentHash(FunctionFactory & factory)
 {
-    factory.registerFunction<NuColumnarConsistentHash>();
-    factory.registerFunction<NuColumnarHashRange>();
+    factory.registerFunction<GetShardFromDict>();
+    factory.registerFunction<GetShardsFromDictByBucket>();
 }
 }

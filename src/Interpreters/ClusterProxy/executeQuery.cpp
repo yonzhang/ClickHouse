@@ -107,7 +107,7 @@ static std::optional<std::string> findActiveVerColFromDictionaryIfExists(const C
 
     const auto& db_table = table_expr->database_and_table_name->as<ASTIdentifier>();
 
-    return ReshardingUtils::findActiveShardingVersionIfExists(context.getExternalDictionariesLoader(), db_table->name);
+    return ReshardingUtils::findActiveShardingVersionIfExists(context.getExternalDictionariesLoader(), db_table->name, "00000000");
 }
 
 /**
@@ -165,6 +165,7 @@ Pipes executeQuery(
     if(foundVer){
         LOG_DEBUG(&Poco::Logger::get("ClusterProxy::executeQuery"), "found active sharding version: {}", *foundVer);
         VirtualColumnUtils::rewriteEntityInAst(query_ast, "_sharding_ver", *foundVer);
+        // VirtualColumnUtils::addPrewhereInAst(query_ast);
     }else{
         LOG_DEBUG(&Poco::Logger::get("ClusterProxy::executeQuery"), "not found active sharding version");
     }

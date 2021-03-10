@@ -69,6 +69,35 @@ ASTPtr buildWhereExpression(const ASTs & functions)
 
 namespace VirtualColumnUtils
 {
+void addPrewhereInAst(ASTPtr ast)
+{
+    auto & select = ast->as<ASTSelectQuery &>();
+    if (!select.prewhere())
+        select.setExpression(ASTSelectQuery::Expression::PREWHERE, std::make_shared<ASTExpressionList>());
+    // prewhere version = dictGetOrDefault('default.ActivePartition', 
+    //                                      ActiveColumn, 
+    //                                      ('V3AdsEndurance', 'organic', toString(toYYYYMMDD(eventts))), 
+    //                                     toUInt32(0))     
+    // create identifier 
+    auto verIdentifier = std::make_shared<ASTIdentifier>("version");
+    // create `tuple` function  ('V3AdsEndurance', 'organic', toString(toYYYYMMDD(eventts)))
+    auto keyTupleFun = makeASTFunction("tuple", 
+                                    std::make_shared<ASTLiteral>("V3AdsEndurance"),
+                                    std::make_shared<ASTLiteral>("organic"),
+                                    makeASTFunction("toString", makeASTFunction("toYYYYMMDD", std::make_shared<ASTIdentifier>("eventts"))));
+    // create dictGetOrDefault function 
+    auto dictFun = makeASTFunction("dictGetOrDefault",
+                                   std::make_shared<ASTLiteral>("default.ActivePartition"),
+                                   std::make_shared<ASTLiteral>("A"), 
+                                   keyTupleFun,
+                                   makeASTFunction("toUInt32", std::make_shared<ASTLiteral>(0))
+                                   );                               
+    // create ASTFunction of "equals" with expression list
+    auto prewhereFun = makeASTFunction("equals", verIdentifier, dictFun);
+
+    // attach prewhere
+    select.prewhere()->children.push_back(prewhereFun);
+}
 
 void rewriteEntityInAst(ASTPtr ast, const String & column_name, const Field & value, const String & func)
 {
